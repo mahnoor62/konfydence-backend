@@ -1,7 +1,7 @@
-import express, { Request, Response } from 'express';
-import { body, validationResult } from 'express-validator';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
-import ContactMessage from '../models/ContactMessage';
+const express = require('express');
+const { body, validationResult } = require('express-validator');
+const { authenticateToken } = require('../middleware/auth');
+const ContactMessage = require('../models/ContactMessage');
 
 const router = express.Router();
 
@@ -13,7 +13,7 @@ router.post(
     body('topic').isIn(['b2b_demo', 'b2c_question', 'education', 'other']),
     body('message').notEmpty()
   ],
-  async (req: Request, res: Response) => {
+  async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
@@ -28,7 +28,7 @@ router.post(
   }
 );
 
-router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.get('/', authenticateToken, async (req, res) => {
   try {
     const messages = await ContactMessage.find().sort({ createdAt: -1 });
     res.json(messages);
@@ -37,7 +37,7 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   }
 });
 
-router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const message = await ContactMessage.findByIdAndUpdate(
       req.params.id,
@@ -53,5 +53,5 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) =>
   }
 });
 
-export default router;
+module.exports = router;
 

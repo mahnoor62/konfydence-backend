@@ -1,7 +1,7 @@
-import express, { Request, Response } from 'express';
-import { body, validationResult } from 'express-validator';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
-import BlogPost from '../models/BlogPost';
+const express = require('express');
+const { body, validationResult } = require('express-validator');
+const { authenticateToken } = require('../middleware/auth');
+const BlogPost = require('../models/BlogPost');
 
 const router = express.Router();
 
@@ -128,9 +128,9 @@ const defaultBlogPosts = [
     publishedAt: new Date('2023-09-18'),
   },
   {
-    title: 'The Parent’s Guide to Deepfake Calls',
+    title: "The Parent's Guide to Deepfake Calls",
     slug: 'parents-guide-deepfake-calls',
-    excerpt: 'Questions to ask if your child calls for “urgent” help.',
+    excerpt: 'Questions to ask if your child calls for "urgent" help.',
     content: 'Full article about deepfake phone scams.',
     category: 'guide',
     tags: ['Families', 'Deepfake'],
@@ -237,14 +237,14 @@ async function ensureSeedBlogs() {
   }
 }
 
-router.get('/', async (req: Request, res: Response) => {
+router.get('/', async (req, res) => {
   try {
     await ensureSeedBlogs();
     const { page = 1, limit = 10, published, all } = req.query;
-    const query: any = {};
+    const query = {};
     const fetchAll = all === 'true';
-    const pageNumber = Math.max(parseInt(page as string, 10) || 1, 1);
-    const limitNumber = Math.max(parseInt(limit as string, 10) || 10, 1);
+    const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNumber = Math.max(parseInt(limit, 10) || 10, 1);
     
     if (published === 'true') {
       query.isPublished = true;
@@ -282,7 +282,7 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/:slug', async (req: Request, res: Response) => {
+router.get('/:slug', async (req, res) => {
   try {
     const post = await BlogPost.findOne({ slug: req.params.slug });
     if (!post) {
@@ -303,7 +303,7 @@ router.post(
     body('excerpt').notEmpty(),
     body('content').notEmpty()
   ],
-  async (req: AuthRequest, res: Response) => {
+  async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
@@ -316,7 +316,7 @@ router.post(
 
       const post = await BlogPost.create(req.body);
       res.status(201).json(post);
-    } catch (error: any) {
+    } catch (error) {
       if (error.code === 11000) {
         return res.status(400).json({ error: 'Blog post slug already exists' });
       }
@@ -325,7 +325,7 @@ router.post(
   }
 );
 
-router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.put('/:id', authenticateToken, async (req, res) => {
   try {
     if (req.body.isPublished && !req.body.publishedAt) {
       req.body.publishedAt = new Date();
@@ -345,7 +345,7 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) =>
   }
 });
 
-router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.delete('/:id', authenticateToken, async (req, res) => {
   try {
     const post = await BlogPost.findByIdAndDelete(req.params.id);
     if (!post) {
@@ -357,5 +357,5 @@ router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response)
   }
 });
 
-export default router;
+module.exports = router;
 

@@ -1,10 +1,10 @@
-import express, { Request, Response } from 'express';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
-import SiteSettings from '../models/SiteSettings';
+const express = require('express');
+const { authenticateToken } = require('../middleware/auth');
+const SiteSettings = require('../models/SiteSettings');
 
 const router = express.Router();
 
-router.get('/', async (req: Request, res: Response) => {
+router.get('/', async (req, res) => {
   try {
     let settings = await SiteSettings.findOne();
     if (!settings) {
@@ -16,7 +16,7 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
-router.put('/', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.put('/', authenticateToken, async (req, res) => {
   try {
     let settings = await SiteSettings.findOne();
     if (!settings) {
@@ -34,5 +34,5 @@ router.put('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   }
 });
 
-export default router;
+module.exports = router;
 

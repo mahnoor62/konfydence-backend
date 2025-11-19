@@ -1,22 +1,7 @@
-import mongoose, { Schema, Document } from 'mongoose';
+const mongoose = require('mongoose');
+const { Schema } = mongoose;
 
-export interface ISiteSettings extends Document {
-  heroB2CTitle: string;
-  heroB2CSubtext: string;
-  heroB2BTitle: string;
-  heroB2BSubtext: string;
-  heroEducationTitle: string;
-  heroEducationSubtext: string;
-  tagline: string;
-  metaTitle: string;
-  metaDescription: string;
-  founderQuote?: string;
-  founderName?: string;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-const SiteSettingsSchema = new Schema<ISiteSettings>(
+const SiteSettingsSchema = new Schema(
   {
     heroB2CTitle: { type: String, default: 'Outsmart Scams. Build Digital Confidence.' },
     heroB2CSubtext: { type: String, default: 'Interactive training kits and digital learning for every generation.' },
@@ -41,5 +26,4 @@ SiteSettingsSchema.statics.getSettings = async function() {
   return settings;
 };
 
-export default mongoose.model<ISiteSettings>('SiteSettings', SiteSettingsSchema);
-
+module.exports = mongoose.model('SiteSettings', SiteSettingsSchema);

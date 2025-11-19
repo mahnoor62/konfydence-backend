@@ -1,14 +1,14 @@
-import express, { Request, Response } from 'express';
-import { body, validationResult } from 'express-validator';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
-import Testimonial from '../models/Testimonial';
+const express = require('express');
+const { body, validationResult } = require('express-validator');
+const { authenticateToken } = require('../middleware/auth');
+const Testimonial = require('../models/Testimonial');
 
 const router = express.Router();
 
-router.get('/', async (req: Request, res: Response) => {
+router.get('/', async (req, res) => {
   try {
     const { segment } = req.query;
-    const query: any = { isActive: true };
+    const query = { isActive: true };
     if (segment) {
       query.segment = segment;
     }
@@ -29,7 +29,7 @@ router.post(
     body('quote').notEmpty(),
     body('segment').isIn(['b2b', 'b2c', 'b2e'])
   ],
-  async (req: AuthRequest, res: Response) => {
+  async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
@@ -44,7 +44,7 @@ router.post(
   }
 );
 
-router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const testimonial = await Testimonial.findByIdAndUpdate(
       req.params.id,
@@ -60,7 +60,7 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) =>
   }
 });
 
-router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.delete('/:id', authenticateToken, async (req, res) => {
   try {
     const testimonial = await Testimonial.findByIdAndDelete(req.params.id);
     if (!testimonial) {
@@ -72,5 +72,5 @@ router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response)
   }
 });
 
-export default router;
+module.exports = router;
 

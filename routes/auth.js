@@ -1,9 +1,9 @@
-import express, { Request, Response } from 'express';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import { body, validationResult } from 'express-validator';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
-import Admin from '../models/Admin';
+const express = require('express');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { body, validationResult } = require('express-validator');
+const { authenticateToken } = require('../middleware/auth');
+const Admin = require('../models/Admin');
 
 const router = express.Router();
 
@@ -13,7 +13,7 @@ router.post(
     body('email').isEmail().normalizeEmail(),
     body('password').notEmpty()
   ],
-  async (req: Request, res: Response) => {
+  async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
@@ -67,7 +67,7 @@ router.post(
     body('email').isEmail().normalizeEmail(),
     body('password').isLength({ min: 6 })
   ],
-  async (req: Request, res: Response) => {
+  async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
@@ -113,7 +113,7 @@ router.post(
     body('password').isLength({ min: 6 }),
     body('name').optional().trim()
   ],
-  async (req: Request, res: Response) => {
+  async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
@@ -151,7 +151,7 @@ router.post(
           role: 'admin'
         }
       });
-    } catch (error: any) {
+    } catch (error) {
       console.error('Admin registration error:', error);
       if (error.code === 11000) {
         return res.status(400).json({ error: 'Email already exists' });
@@ -161,7 +161,7 @@ router.post(
   }
 );
 
-router.get('/admins', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.get('/admins', authenticateToken, async (req, res) => {
   try {
     const admins = await Admin.find().select('-passwordHash').sort({ createdAt: -1 });
     res.json(admins);
@@ -171,7 +171,7 @@ router.get('/admins', authenticateToken, async (req: AuthRequest, res: Response)
   }
 });
 
-router.get('/admins/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.get('/admins/:id', authenticateToken, async (req, res) => {
   try {
     const admin = await Admin.findById(req.params.id).select('-passwordHash');
     if (!admin) {
@@ -184,10 +184,10 @@ router.get('/admins/:id', authenticateToken, async (req: AuthRequest, res: Respo
   }
 });
 
-router.put('/admins/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.put('/admins/:id', authenticateToken, async (req, res) => {
   try {
     const { name, isActive } = req.body;
-    const updateData: any = {};
+    const updateData = {};
     if (name !== undefined) updateData.name = name;
     if (isActive !== undefined) updateData.isActive = isActive;
 
@@ -207,7 +207,7 @@ router.put('/admins/:id', authenticateToken, async (req: AuthRequest, res: Respo
   }
 });
 
-router.delete('/admins/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.delete('/admins/:id', authenticateToken, async (req, res) => {
   try {
     if (req.userId === req.params.id) {
       return res.status(400).json({ error: 'Cannot delete your own account' });
@@ -224,5 +224,5 @@ router.delete('/admins/:id', authenticateToken, async (req: AuthRequest, res: Re
   }
 });
 
-export default router;
+module.exports = router;
 

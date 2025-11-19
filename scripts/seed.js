@@ -1,13 +1,13 @@
-import mongoose from 'mongoose';
-import bcrypt from 'bcryptjs';
-import dotenv from 'dotenv';
-import Admin from '../models/Admin';
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const dotenv = require('dotenv');
+const Admin = require('../models/Admin');
 
 dotenv.config();
 
 async function seed() {
   try {
-    await mongoose.connect(process.env.MONGODB_URI as string);
+    await mongoose.connect(process.env.MONGODB_URI);
     console.log('Connected to MongoDB');
 
     const email = process.env.ADMIN_EMAIL || 'admin@konfydence.com';

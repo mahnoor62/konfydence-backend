@@ -1,7 +1,7 @@
-import express, { Request, Response } from 'express';
-import { body, validationResult } from 'express-validator';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
-import Product from '../models/Product';
+const express = require('express');
+const { body, validationResult } = require('express-validator');
+const { authenticateToken } = require('../middleware/auth');
+const Product = require('../models/Product');
 
 const defaultProducts = [
   {
@@ -259,12 +259,12 @@ async function ensureSeedProducts() {
 
 const router = express.Router();
 
-router.get('/', async (req: Request, res: Response) => {
+router.get('/', async (req, res) => {
   try {
     await ensureSeedProducts();
 
-    const pageParam = parseInt(req.query.page as string, 10);
-    const limitParam = parseInt(req.query.limit as string, 10);
+    const pageParam = parseInt(req.query.page, 10);
+    const limitParam = parseInt(req.query.limit, 10);
     const includeInactive = req.query.includeInactive === 'true';
     const skipPagination = req.query.all === 'true';
     const shouldPaginate = !skipPagination && (!Number.isNaN(pageParam) || !Number.isNaN(limitParam));
@@ -300,7 +300,7 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/featured/homepage', async (req: Request, res: Response) => {
+router.get('/featured/homepage', async (req, res) => {
   try {
     let featuredProducts = await Product.find({ 
       isFeatured: true,
@@ -314,12 +314,12 @@ router.get('/featured/homepage', async (req: Request, res: Response) => {
           slug: 'private-users',
           description: 'Perfect for individuals and families to boost personal security awareness.',
           price: 49,
-          type: 'starter' as const,
+          type: 'starter',
           isActive: true,
           imageUrl: '/images/private-users.jpg',
           sortOrder: 1,
           isFeatured: true,
-          category: 'private-users' as const,
+          category: 'private-users',
           ctaText: 'Visit the Shop',
           ctaHref: '/shop',
           buttonColor: '#FFD700',
@@ -334,12 +334,12 @@ router.get('/featured/homepage', async (req: Request, res: Response) => {
           slug: 'schools',
           description: 'Empower students with our engaging digital security curriculum.',
           price: 499,
-          type: 'bundle' as const,
+          type: 'bundle',
           isActive: true,
           imageUrl: '/images/schools.jpg',
           sortOrder: 2,
           isFeatured: true,
-          category: 'schools' as const,
+          category: 'schools',
           ctaText: 'Request Info Material',
           ctaHref: '/education',
           buttonColor: '#0B7897',
@@ -353,12 +353,12 @@ router.get('/featured/homepage', async (req: Request, res: Response) => {
           slug: 'businesses',
           description: 'Protect your team and ensure compliance with NIS2 standards.',
           price: 19,
-          type: 'membership' as const,
+          type: 'membership',
           isActive: true,
           imageUrl: '/images/businesses.jpg',
           sortOrder: 3,
           isFeatured: true,
-          category: 'businesses' as const,
+          category: 'businesses',
           ctaText: 'Request Demo & Pricing',
           ctaHref: '/contact?topic=b2b_demo',
           buttonColor: '#063C5E',
@@ -398,7 +398,7 @@ router.get('/featured/homepage', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/slug/:slug', async (req: Request, res: Response) => {
+router.get('/slug/:slug', async (req, res) => {
   try {
     const product = await Product.findOne({ slug: req.params.slug, isActive: true });
     if (!product) {
@@ -410,7 +410,7 @@ router.get('/slug/:slug', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/:id', async (req: Request, res: Response) => {
+router.get('/:id', async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
     if (!product) {
@@ -433,7 +433,7 @@ router.post(
     body('type').isIn(['starter', 'bundle', 'membership']),
     body('imageUrl').notEmpty()
   ],
-  async (req: AuthRequest, res: Response) => {
+  async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
@@ -442,7 +442,7 @@ router.post(
 
       const product = await Product.create(req.body);
       res.status(201).json(product);
-    } catch (error: any) {
+    } catch (error) {
       if (error.code === 11000) {
         return res.status(400).json({ error: 'Product slug already exists' });
       }
@@ -454,7 +454,7 @@ router.post(
 router.put(
   '/:id',
   authenticateToken,
-  async (req: AuthRequest, res: Response) => {
+  async (req, res) => {
     try {
       const product = await Product.findByIdAndUpdate(
         req.params.id,
@@ -471,7 +471,7 @@ router.put(
   }
 );
 
-router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.delete('/:id', authenticateToken, async (req, res) => {
   try {
     const product = await Product.findByIdAndDelete(req.params.id);
     if (!product) {
@@ -483,5 +483,5 @@ router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response)
   }
 });
 
-export default router;
+module.exports = router;
 

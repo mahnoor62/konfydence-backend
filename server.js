@@ -1,17 +1,17 @@
-import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
-import mongoose from 'mongoose';
-import path from 'path';
-import authRoutes from './routes/auth';
-import productRoutes from './routes/products';
-import blogRoutes from './routes/blog';
-import testimonialRoutes from './routes/testimonials';
-import partnerRoutes from './routes/partners';
-import leadRoutes from './routes/leads';
-import contactRoutes from './routes/contact';
-import settingsRoutes from './routes/settings';
-import uploadRoutes from './routes/uploads';
+const express = require('express');
+const cors = require('cors');
+const dotenv = require('dotenv');
+const mongoose = require('mongoose');
+const path = require('path');
+const authRoutes = require('./routes/auth');
+const productRoutes = require('./routes/products');
+const blogRoutes = require('./routes/blog');
+const testimonialRoutes = require('./routes/testimonials');
+const partnerRoutes = require('./routes/partners');
+const leadRoutes = require('./routes/leads');
+const contactRoutes = require('./routes/contact');
+const settingsRoutes = require('./routes/settings');
+const uploadRoutes = require('./routes/uploads');
 
 dotenv.config();
 

@@ -1,16 +1,7 @@
-import mongoose, { Schema, Document } from 'mongoose';
+const mongoose = require('mongoose');
+const { Schema } = mongoose;
 
-export interface IAdmin extends Document {
-  email: string;
-  passwordHash: string;
-  name?: string;
-  isActive: boolean;
-  lastLogin?: Date;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-const AdminSchema = new Schema<IAdmin>(
+const AdminSchema = new Schema(
   {
     email: {
       type: String,
@@ -38,5 +29,4 @@ const AdminSchema = new Schema<IAdmin>(
   { timestamps: true }
 );
 
-export default mongoose.model<IAdmin>('Admin', AdminSchema);
-
+module.exports = mongoose.model('Admin', AdminSchema);

@@ -1,7 +1,7 @@
-import express, { Request, Response } from 'express';
-import { body, validationResult } from 'express-validator';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
-import PartnerLogo from '../models/PartnerLogo';
+const express = require('express');
+const { body, validationResult } = require('express-validator');
+const { authenticateToken } = require('../middleware/auth');
+const PartnerLogo = require('../models/PartnerLogo');
 
 const defaultPartnerLogos = [
   {
@@ -58,7 +58,7 @@ async function ensureSeedPartners() {
         needsUpdate = true;
       }
       if (existing.type !== partner.type) {
-        existing.type = partner.type as 'press' | 'partner' | 'event';
+        existing.type = partner.type;
         needsUpdate = true;
       }
       if (!existing.isActive) {
@@ -74,11 +74,11 @@ async function ensureSeedPartners() {
 
 const router = express.Router();
 
-router.get('/', async (req: Request, res: Response) => {
+router.get('/', async (req, res) => {
   try {
     await ensureSeedPartners();
     const { type } = req.query;
-    const query: any = { isActive: true };
+    const query = { isActive: true };
     if (type) {
       query.type = type;
     }
@@ -97,7 +97,7 @@ router.post(
     body('logoUrl').notEmpty(),
     body('type').isIn(['press', 'partner', 'event'])
   ],
-  async (req: AuthRequest, res: Response) => {
+  async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
@@ -112,7 +112,7 @@ router.post(
   }
 );
 
-router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const partner = await PartnerLogo.findByIdAndUpdate(
       req.params.id,
@@ -128,7 +128,7 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) =>
   }
 });
 
-router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.delete('/:id', authenticateToken, async (req, res) => {
   try {
     const partner = await PartnerLogo.findByIdAndDelete(req.params.id);
     if (!partner) {
@@ -140,5 +140,5 @@ router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response)
   }
 });
 
-export default router;
+module.exports = router;
 

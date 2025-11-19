@@ -1,7 +1,7 @@
-import express, { Request, Response } from 'express';
-import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
+const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
 const uploadsDir = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -26,7 +26,7 @@ const upload = multer({
 
 const router = express.Router();
 
-router.post('/', upload.single('file'), (req: Request, res: Response) => {
+router.post('/', upload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
@@ -43,5 +43,5 @@ router.post('/', upload.single('file'), (req: Request, res: Response) => {
   });
 });
 
-export default router;
+module.exports = router;
 
