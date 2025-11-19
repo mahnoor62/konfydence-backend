@@ -7,7 +7,7 @@ dotenv.config();
 
 async function seed() {
   try {
-    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/konfydence');
+    await mongoose.connect(process.env.MONGODB_URI as string);
     console.log('Connected to MongoDB');
 
     const email = process.env.ADMIN_EMAIL || 'admin@konfydence.com';
