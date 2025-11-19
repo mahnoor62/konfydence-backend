@@ -1,0 +1,73 @@
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import mongoose from 'mongoose';
+import path from 'path';
+import authRoutes from './routes/auth';
+import productRoutes from './routes/products';
+import blogRoutes from './routes/blog';
+import testimonialRoutes from './routes/testimonials';
+import partnerRoutes from './routes/partners';
+import leadRoutes from './routes/leads';
+import contactRoutes from './routes/contact';
+import settingsRoutes from './routes/settings';
+import uploadRoutes from './routes/uploads';
+
+dotenv.config();
+
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+// CORS Configuration for separate deployments
+const allowedOrigins = [
+  process.env.FRONTEND_URL || 'http://localhost:3000',
+  process.env.ADMIN_URL || 'http://localhost:3001',
+].filter(Boolean);
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      // In production, you might want to be more strict
+      if (process.env.NODE_ENV === 'development') {
+        callback(null, true); // Allow in development
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+}));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/konfydence')
+  .then(() => console.log('✅ Connected to MongoDB'))
+  .catch((err) => console.error('❌ MongoDB connection error:', err));
+
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+app.use('/api/auth', authRoutes);
+app.use('/api/products', productRoutes);
+app.use('/api/blog', blogRoutes);
+app.use('/api/testimonials', testimonialRoutes);
+app.use('/api/partners', partnerRoutes);
+app.use('/api/leads', leadRoutes);
+app.use('/api/contact', contactRoutes);
+app.use('/api/settings', settingsRoutes);
+app.use('/api/uploads', uploadRoutes);
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+});
+
