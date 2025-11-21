@@ -20,8 +20,8 @@ const PORT = process.env.PORT || 5000;
 
 // CORS Configuration for separate deployments
 const allowedOrigins = [
-  process.env.FRONTEND_URL || 'http://localhost:3000',
-  process.env.ADMIN_URL || 'http://localhost:3001',
+  process.env.FRONTEND_URL,
+  process.env.ADMIN_URL,
 ].filter(Boolean);
 
 app.use(cors({
