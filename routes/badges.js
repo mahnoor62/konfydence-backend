@@ -5,27 +5,8 @@ const Badge = require('../models/Badge');
 
 const router = express.Router();
 
-const defaultBadges = [
-  { name: 'New', slug: 'new', isActive: true, sortOrder: 1 },
-  { name: 'Best Seller', slug: 'best-seller', isActive: true, sortOrder: 2 },
-  { name: 'Featured', slug: 'featured', isActive: true, sortOrder: 3 },
-  { name: 'Family', slug: 'family', isActive: true, sortOrder: 4 },
-  { name: 'Schools', slug: 'schools', isActive: true, sortOrder: 5 },
-  { name: 'B2B', slug: 'b2b', isActive: true, sortOrder: 6 },
-];
-
-async function ensureSeedBadges() {
-  for (const badge of defaultBadges) {
-    const existing = await Badge.findOne({ slug: badge.slug });
-    if (!existing) {
-      await Badge.create(badge);
-    }
-  }
-}
-
 router.get('/', async (req, res) => {
   try {
-    await ensureSeedBadges();
     const { active } = req.query;
     const query = {};
     

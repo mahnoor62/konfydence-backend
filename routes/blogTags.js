@@ -5,27 +5,8 @@ const BlogTag = require('../models/BlogTag');
 
 const router = express.Router();
 
-const defaultTags = [
-  { name: 'Security', slug: 'security', isActive: true, sortOrder: 1 },
-  { name: 'Awareness', slug: 'awareness', isActive: true, sortOrder: 2 },
-  { name: 'Training', slug: 'training', isActive: true, sortOrder: 3 },
-  { name: 'Compliance', slug: 'compliance', isActive: true, sortOrder: 4 },
-  { name: 'Phishing', slug: 'phishing', isActive: true, sortOrder: 5 },
-  { name: 'Social Engineering', slug: 'social-engineering', isActive: true, sortOrder: 6 },
-];
-
-async function ensureSeedTags() {
-  for (const tag of defaultTags) {
-    const existing = await BlogTag.findOne({ slug: tag.slug });
-    if (!existing) {
-      await BlogTag.create(tag);
-    }
-  }
-}
-
 router.get('/', async (req, res) => {
   try {
-    await ensureSeedTags();
     const { active } = req.query;
     const query = {};
     

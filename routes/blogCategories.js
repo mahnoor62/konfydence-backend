@@ -5,27 +5,8 @@ const BlogCategory = require('../models/BlogCategory');
 
 const router = express.Router();
 
-const defaultCategories = [
-  { name: 'Insight', slug: 'insight', isActive: true, sortOrder: 1 },
-  { name: 'Technique', slug: 'technique', isActive: true, sortOrder: 2 },
-  { name: 'Checklist', slug: 'checklist', isActive: true, sortOrder: 3 },
-  { name: 'Guide', slug: 'guide', isActive: true, sortOrder: 4 },
-  { name: 'Template', slug: 'template', isActive: true, sortOrder: 5 },
-  { name: 'Reference', slug: 'reference', isActive: true, sortOrder: 6 },
-];
-
-async function ensureSeedCategories() {
-  for (const category of defaultCategories) {
-    const existing = await BlogCategory.findOne({ slug: category.slug });
-    if (!existing) {
-      await BlogCategory.create(category);
-    }
-  }
-}
-
 router.get('/', async (req, res) => {
   try {
-    await ensureSeedCategories();
     const { active } = req.query;
     const query = {};
     

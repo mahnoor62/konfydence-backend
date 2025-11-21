@@ -5,24 +5,8 @@ const ProductType = require('../models/ProductType');
 
 const router = express.Router();
 
-const defaultTypes = [
-  { name: 'Starter', slug: 'starter', isActive: true, sortOrder: 1 },
-  { name: 'Bundle', slug: 'bundle', isActive: true, sortOrder: 2 },
-  { name: 'Membership', slug: 'membership', isActive: true, sortOrder: 3 },
-];
-
-async function ensureSeedTypes() {
-  for (const type of defaultTypes) {
-    const existing = await ProductType.findOne({ slug: type.slug });
-    if (!existing) {
-      await ProductType.create(type);
-    }
-  }
-}
-
 router.get('/', async (req, res) => {
   try {
-    await ensureSeedTypes();
     const { active } = req.query;
     const query = {};
     
