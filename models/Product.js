@@ -9,8 +9,11 @@ const ProductSchema = new Schema(
     price: { type: Number, required: true },
     type: {
       type: String,
-      enum: ['starter', 'bundle', 'membership'],
       required: true
+    },
+    category: {
+      type: String,
+      enum: ['private-users', 'schools', 'businesses'],
     },
     isActive: { type: Boolean, default: true },
     imageUrl: { type: String, required: true },

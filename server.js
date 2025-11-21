@@ -59,7 +59,11 @@ app.get('/api/health', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
+app.use('/api/product-types', require('./routes/productTypes'));
+app.use('/api/badges', require('./routes/badges'));
 app.use('/api/blog', blogRoutes);
+app.use('/api/blog-categories', require('./routes/blogCategories'));
+app.use('/api/blog-tags', require('./routes/blogTags'));
 app.use('/api/testimonials', testimonialRoutes);
 app.use('/api/partners', partnerRoutes);
 app.use('/api/leads', leadRoutes);
@@ -70,5 +74,6 @@ app.use('/api/uploads', uploadRoutes);
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
+
 
 
