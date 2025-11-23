@@ -7,6 +7,11 @@ const router = express.Router();
 
 router.get('/', async (req, res) => {
   try {
+    // Prevent caching of dynamic data
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    
     const { active } = req.query;
     const query = {};
     
