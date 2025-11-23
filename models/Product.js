@@ -16,6 +16,7 @@ const ProductSchema = new Schema(
       enum: ['private-users', 'schools', 'businesses'],
     },
     isActive: { type: Boolean, default: true },
+    isFeatured: { type: Boolean, default: false },
     imageUrl: { type: String, required: true },
     badges: [{ type: String }],
     sortOrder: { type: Number, default: 0 }

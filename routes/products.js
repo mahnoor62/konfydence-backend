@@ -32,7 +32,7 @@ router.get('/', async (req, res) => {
       const limit = Math.min(Math.max(limitBase, 1), 50);
       const [products, total] = await Promise.all([
         Product.find(query)
-          .sort({ sortOrder: 1, createdAt: -1 })
+          .sort({ createdAt: -1, sortOrder: 1 })
           .skip((page - 1) * limit)
           .limit(limit),
         Product.countDocuments(query)
@@ -49,7 +49,7 @@ router.get('/', async (req, res) => {
       });
     }
 
-    const products = await Product.find(query).sort({ sortOrder: 1, createdAt: -1 });
+    const products = await Product.find(query).sort({ createdAt: -1, sortOrder: 1 });
     res.json(products);
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -60,8 +60,9 @@ router.get('/featured/homepage', async (req, res) => {
   try {
     const featuredProducts = await Product.find({ 
       isFeatured: true,
+      isActive: true,
       category: { $in: ['private-users', 'schools', 'businesses'] }
-    }).sort({ sortOrder: 1 });
+    }).sort({ sortOrder: 1, createdAt: -1 }).limit(6);
 
     res.json(featuredProducts);
   } catch (error) {
