@@ -16,35 +16,51 @@ const uploadRoutes = require('./routes/uploads');
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT
 
 // CORS Configuration for separate deployments
-const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  process.env.ADMIN_URL,
-].filter(Boolean);
+// const allowedOrigins = [
+//   process.env.FRONTEND_URL,
+//   process.env.ADMIN_URL,
+// ].filter(Boolean);
 
-app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
+// app.use(cors({
+//   origin: function (origin, callback) {
+//     // Allow requests with no origin (like mobile apps or curl requests)
+//     if (!origin) return callback(null, true);
     
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      // In production, you might want to be more strict
-      if (process.env.NODE_ENV === 'development') {
-        callback(null, true); // Allow in development
-      } else {
-        callback(new Error('Not allowed by CORS'));
-      }
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  exposedHeaders: ['Content-Range', 'X-Content-Range'],
-}));
+//     if (allowedOrigins.indexOf(origin) !== -1) {
+//       callback(null, true);
+//     } else {
+//       // In production, you might want to be more strict
+//       if (process.env.NODE_ENV === 'development') {
+//         callback(null, true); // Allow in development
+//       } else {
+//         callback(new Error('Not allowed by CORS'));
+//       }
+//     }
+//   },
+//   credentials: true,
+//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cache-Control', 'Pragma', 'Expires'],
+//   exposedHeaders: ['Content-Range', 'X-Content-Range'],
+// }));
+
+
+
+const CORS_OPTIONS = process.env.CORS_OPTIONS;
+console.log('CORS_OPTIONS', CORS_OPTIONS);
+let corsOrigins = [];
+if (CORS_OPTIONS) {
+    corsOrigins = CORS_OPTIONS.split(',')
+}
+
+const corsOptions = {
+    origin: corsOrigins,
+    optionsSuccessStatus: 200,
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
