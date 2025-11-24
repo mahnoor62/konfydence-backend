@@ -18,6 +18,13 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT
 
+app.use((req, res, next) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  next();
+});
+
 // CORS Configuration for separate deployments
 // const allowedOrigins = [
 //   process.env.FRONTEND_URL,
