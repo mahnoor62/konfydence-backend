@@ -6,11 +6,7 @@ const PartnerLogoSchema = new Schema(
     name: { type: String, required: true },
     logoUrl: { type: String, required: true },
     linkUrl: { type: String },
-    type: {
-      type: String,
-      enum: ['press', 'partner', 'event'],
-      required: true
-    },
+    type: { type: String, required: true },
     isActive: { type: Boolean, default: true }
   },
   { timestamps: true }

@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const PartnerLogo = require('../models/PartnerLogo');
+const PartnerType = require('../models/PartnerType');
 
 
 const router = express.Router();
@@ -26,7 +27,16 @@ router.post(
   [
     body('name').notEmpty().withMessage('Partner name is required'),
     body('logoUrl').notEmpty().withMessage('Logo URL is required'),
-    body('type').isIn(['press', 'partner', 'event']).withMessage('Partner type must be press, partner, or event')
+    body('type')
+      .notEmpty()
+      .withMessage('Partner type is required')
+      .custom(async (value) => {
+        const existingType = await PartnerType.findOne({ slug: value, isActive: true });
+        if (!existingType) {
+          throw new Error('Partner type not found or inactive');
+        }
+        return true;
+      }),
   ],
   async (req, res) => {
     try {
@@ -58,7 +68,18 @@ router.put(
   [
     body('name').optional().notEmpty().withMessage('Partner name cannot be empty'),
     body('logoUrl').optional().notEmpty().withMessage('Logo URL cannot be empty'),
-    body('type').optional().isIn(['press', 'partner', 'event']).withMessage('Partner type must be press, partner, or event')
+    body('type')
+      .optional()
+      .notEmpty()
+      .withMessage('Partner type cannot be empty')
+      .custom(async (value) => {
+        if (!value) return true;
+        const existingType = await PartnerType.findOne({ slug: value });
+        if (!existingType) {
+          throw new Error('Partner type not found');
+        }
+        return true;
+      }),
   ],
   async (req, res) => {
     try {

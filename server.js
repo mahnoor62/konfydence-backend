@@ -83,6 +83,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/product-types', require('./routes/productTypes'));
+app.use('/api/partner-types', require('./routes/partnerTypes'));
 app.use('/api/badges', require('./routes/badges'));
 app.use('/api/blog', blogRoutes);
 app.use('/api/blog-categories', require('./routes/blogCategories'));
