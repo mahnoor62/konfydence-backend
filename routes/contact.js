@@ -53,6 +53,20 @@ router.put('/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// DELETE Contact Message
+router.delete('/:id', authenticateToken, async (req, res) => {
+  try {
+    const message = await ContactMessage.findByIdAndDelete(req.params.id);
+    if (!message) {
+      return res.status(404).json({ error: 'Contact message not found' });
+    }
+    res.json({ message: 'Contact message deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting contact message:', error);
+    res.status(500).json({ error: 'Failed to delete contact message. Please try again.' });
+  }
+});
+
 module.exports = router;
 
 

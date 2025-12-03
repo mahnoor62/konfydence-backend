@@ -8,8 +8,12 @@ const BlogPostSchema = new Schema(
     excerpt: { type: String, required: true },
     content: { type: String, required: true },
     featuredImage: { type: String },
-    tags: [{ type: String }],
-    category: { type: String, default: 'General' },
+    category: {
+      type: String,
+      enum: ['for-families', 'for-companies', 'for-schools', 'news', 'how-to'],
+      required: true,
+      default: 'news'
+    },
     publishedAt: { type: Date },
     isPublished: { type: Boolean, default: false }
   },

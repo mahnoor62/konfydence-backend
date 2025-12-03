@@ -3,12 +3,17 @@ const { Schema } = mongoose;
 
 const EducationLeadSchema = new Schema(
   {
-    schoolName: { type: String, required: true },
-    contactName: { type: String, required: true },
-    role: { type: String, required: true },
+    // New format fields
+    name: { type: String, required: true },
+    school: { type: String, required: true },
     email: { type: String, required: true },
-    cityCountry: { type: String, required: true },
+    role: { type: String },
     message: { type: String },
+    lead_type: { type: String, default: 'b2e' },
+    // Legacy fields for backward compatibility
+    schoolName: { type: String },
+    contactName: { type: String },
+    cityCountry: { type: String },
     status: {
       type: String,
       enum: ['new', 'contacted', 'qualified', 'closed'],
