@@ -31,7 +31,12 @@ const ProductSchema = new Schema(
       type: String,
       enum: ['gdpr-compliant', 'safe-checkout', 'money-back-guarantee']
     }],
-    sortOrder: { type: Number, default: 0 }
+    sortOrder: { type: Number, default: 0 },
+    // Attached cards for this product
+    cardIds: [{
+      type: Schema.Types.ObjectId,
+      ref: 'Card'
+    }]
   },
   { timestamps: true }
 );

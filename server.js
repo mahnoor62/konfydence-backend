@@ -68,6 +68,8 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+// Stripe webhook needs raw body, handle it before json parser
+app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
@@ -94,6 +96,28 @@ app.use('/api/leads', leadRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/uploads', uploadRoutes);
+app.use('/api/game-progress', require('./routes/gameProgress'));
+
+// New routes
+app.use('/api/cards', require('./routes/cards'));
+app.use('/api/packages', require('./routes/packages'));
+app.use('/api/custom-packages', require('./routes/customPackages'));
+app.use('/api/custom-package-requests', require('./routes/customPackageRequests'));
+app.use('/api/card-registrations', require('./routes/cardRegistrations'));
+app.use('/api/referrals', require('./routes/referrals'));
+app.use('/api/organizations', require('./routes/organizations'));
+app.use('/api/users', require('./routes/users'));
+app.use('/api/user', require('./routes/userDashboard'));
+app.use('/api/transactions', require('./routes/transactions'));
+// Demo route removed - using FreeTrial instead
+// app.use('/api/demos', require('./routes/demos'));
+app.use('/api/dashboard', require('./routes/dashboard'));
+app.use('/api/migrate', require('./routes/migrateLeads'));
+app.use('/api/admin-management', require('./routes/adminManagement'));
+app.use('/api/test', require('./routes/testEmail'));
+app.use('/api/profile', require('./routes/profileUpload'));
+app.use('/api/payments', require('./routes/payments'));
+app.use('/api/free-trial', require('./routes/freeTrial'));
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);

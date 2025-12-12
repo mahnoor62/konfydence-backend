@@ -11,6 +11,7 @@ const authenticateToken = (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret');
     req.userId = decoded.adminId || decoded.userId;
+    req.adminId = decoded.adminId || decoded.userId; // Set adminId for admin routes
     next();
   } catch (error) {
     return res.status(403).json({ error: 'Invalid or expired token' });

@@ -49,7 +49,9 @@ router.get('/', async (req, res) => {
       });
     }
 
-    const products = await Product.find(query).sort({ createdAt: -1, sortOrder: 1 });
+    const products = await Product.find(query)
+      .populate('cardIds', 'title category levels referenceCode')
+      .sort({ createdAt: -1, sortOrder: 1 });
     res.json(products);
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -73,7 +75,8 @@ router.get('/featured/homepage', async (req, res) => {
 
 router.get('/slug/:slug', async (req, res) => {
   try {
-    const product = await Product.findOne({ slug: req.params.slug, isActive: true });
+    const product = await Product.findOne({ slug: req.params.slug, isActive: true })
+      .populate('cardIds', 'title category levels referenceCode');
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
@@ -85,7 +88,8 @@ router.get('/slug/:slug', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id);
+    const product = await Product.findById(req.params.id)
+      .populate('cardIds', 'title category levels referenceCode');
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
@@ -117,7 +121,17 @@ router.post(
         return res.status(400).json({ error: 'Product type is required' });
       }
 
-      const product = await Product.create(req.body);
+      // Ensure targetAudience is saved if provided
+      const productData = { ...req.body };
+      if (productData.targetAudience) {
+        // Validate targetAudience value
+        const validTargetAudiences = ['private-users', 'schools', 'businesses'];
+        if (!validTargetAudiences.includes(productData.targetAudience)) {
+          return res.status(400).json({ error: 'Invalid targetAudience. Must be one of: private-users, schools, businesses' });
+        }
+      }
+
+      const product = await Product.create(productData);
       res.status(201).json(product);
     } catch (error) {
       if (error.code === 11000) {
@@ -151,9 +165,19 @@ router.put(
         return res.status(400).json({ error: errorMessages, errors: errors.array() });
       }
 
+      // Ensure targetAudience is saved if provided
+      const updateData = { ...req.body };
+      if (updateData.targetAudience) {
+        // Validate targetAudience value
+        const validTargetAudiences = ['private-users', 'schools', 'businesses'];
+        if (!validTargetAudiences.includes(updateData.targetAudience)) {
+          return res.status(400).json({ error: 'Invalid targetAudience. Must be one of: private-users, schools, businesses' });
+        }
+      }
+
       const product = await Product.findByIdAndUpdate(
         req.params.id,
-        req.body,
+        updateData,
         { new: true, runValidators: true }
       );
       if (!product) {
