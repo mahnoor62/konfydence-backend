@@ -47,8 +47,8 @@ router.get('/public', async (req, res) => {
     const { targetAudience } = req.query;
     const query = {
       visibility: 'public',
-      status: 'active',
-      type: 'standard'
+      status: 'active'
+      // Removed type: 'standard' filter to allow all package types (standard, digital, etc.)
     };
 
     if (targetAudience) {
