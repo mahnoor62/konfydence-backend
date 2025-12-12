@@ -132,6 +132,9 @@ router.put(
         .populate('basePackageId')
         .populate('customPackageId');
 
+      let emailSent = false;
+      let emailError = null;
+
       // Send email notification if status changed
       if (currentRequest.status !== req.body.status) {
         try {
@@ -140,8 +143,10 @@ router.put(
             req.body.status,
             req.body.adminNotes || ''
           );
-        } catch (emailError) {
-          console.error('Error sending status update email:', emailError);
+          emailSent = true;
+        } catch (emailErr) {
+          console.error('Error sending status update email:', emailErr);
+          emailError = emailErr.message;
           // Don't fail the request if email fails
         }
       }
@@ -160,14 +165,20 @@ router.put(
           if (customPackage) {
             console.log('Sending custom package creation email to:', request.contactEmail);
             await sendCustomPackageCreatedEmail(request, customPackage);
+            emailSent = true;
           }
-        } catch (emailError) {
-          console.error('Error sending custom package creation email:', emailError);
+        } catch (emailErr) {
+          console.error('Error sending custom package creation email:', emailErr);
+          emailError = emailErr.message;
           // Don't fail the request if email fails
         }
       }
 
-      res.json(request);
+      res.json({
+        ...request.toObject(),
+        emailSent,
+        emailError: emailError || null
+      });
     } catch (error) {
       console.error('Error updating request status:', error);
       res.status(500).json({ error: 'Server error' });
