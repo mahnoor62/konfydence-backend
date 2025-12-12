@@ -3,6 +3,7 @@ const { authenticateToken } = require('../middleware/auth');
 const Package = require('../models/Package');
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
+const { sendTransactionSuccessEmail } = require('../utils/emailService');
 
 const router = express.Router();
 
@@ -110,6 +111,40 @@ const getTransactionType = (package, product = null) => {
   });
 
   return transactionType;
+};
+
+// Helper function to set endDate to end of day (23:59:59.999)
+const setEndOfDay = (date) => {
+  if (!date) return null;
+  const d = new Date(date);
+  d.setHours(23, 59, 59, 999);
+  return d;
+};
+
+// Helper function to check if a date is at midnight (00:00:00)
+const isMidnight = (date) => {
+  if (!date) return false;
+  const d = new Date(date);
+  return d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0 && d.getMilliseconds() === 0;
+};
+
+// Helper function to check if transaction has expired
+// Handles both end-of-day endDate (23:59:59.999) and midnight endDate (00:00:00) for backward compatibility
+const isTransactionExpired = (endDate) => {
+  if (!endDate) return false;
+  const now = new Date();
+  const expiry = new Date(endDate);
+  
+  // If endDate is at midnight, treat it as end of that day
+  // Compare date parts only (YYYY-MM-DD) - code is valid until end of expiration day
+  if (isMidnight(expiry)) {
+    const nowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const expiryDate = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
+    return nowDate > expiryDate; // Expired if current date is after expiration date
+  }
+  
+  // For end-of-day endDate, use normal comparison
+  return now > expiry;
 };
 
 // Determine membership type based on package targetAudiences or product targetAudience
@@ -416,7 +451,7 @@ router.post('/webhook', async (req, res) => {
           contractPeriod: {
             startDate: new Date(),
             endDate: package.expiryDate
-              ? new Date(package.expiryDate)
+              ? setEndOfDay(package.expiryDate)
               : (billingType === 'subscription'
                 ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
                 : null),
@@ -448,6 +483,19 @@ router.post('/webhook', async (req, res) => {
           endDate: membershipEndDate,
         });
         await user.save();
+
+        // Send transaction success email
+        try {
+          let organization = null;
+          if (transaction.organizationId) {
+            const Organization = require('../models/Organization');
+            organization = await Organization.findById(transaction.organizationId);
+          }
+          await sendTransactionSuccessEmail(transaction, user, package, organization);
+        } catch (emailError) {
+          console.error('Error sending transaction success email:', emailError);
+          // Don't fail the transaction if email fails
+        }
 
         console.log('Transaction created and membership added for checkout session:', session.id);
       } else {
@@ -506,7 +554,7 @@ router.post('/webhook', async (req, res) => {
             contractPeriod: {
               startDate: new Date(),
               endDate: package.expiryDate
-                ? new Date(package.expiryDate)
+                ? setEndOfDay(package.expiryDate)
                 : (billingType === 'subscription'
                   ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
                   : null),
@@ -531,6 +579,19 @@ router.post('/webhook', async (req, res) => {
             endDate: membershipEndDate,
           });
           await user.save();
+
+          // Send transaction success email
+          try {
+            let organization = null;
+            if (transaction.organizationId) {
+              const Organization = require('../models/Organization');
+              organization = await Organization.findById(transaction.organizationId);
+            }
+            await sendTransactionSuccessEmail(transaction, user, package, organization);
+          } catch (emailError) {
+            console.error('Error sending transaction success email:', emailError);
+            // Don't fail the transaction if email fails
+          }
         }
       }
     }
@@ -643,7 +704,7 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             contractPeriod: {
               startDate: new Date(),
               endDate: package.expiryDate
-                ? new Date(package.expiryDate)
+                ? setEndOfDay(package.expiryDate)
                 : (billingType === 'subscription'
                   ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
                   : null),
@@ -675,6 +736,19 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             endDate: membershipEndDate,
           });
           await user.save();
+
+          // Send transaction success email
+          try {
+            let organization = null;
+            if (transaction.organizationId) {
+              const Organization = require('../models/Organization');
+              organization = await Organization.findById(transaction.organizationId);
+            }
+            await sendTransactionSuccessEmail(transaction, user, package, organization);
+          } catch (emailError) {
+            console.error('Error sending transaction success email:', emailError);
+            // Don't fail the transaction if email fails
+          }
 
           console.log('Transaction created via fallback for session:', session.id);
           
@@ -735,13 +809,8 @@ router.get('/check-purchase-code/:code', async (req, res) => {
     }
 
     // Check if transaction has expired (if endDate exists)
-    let isExpired = false;
     if (transaction.contractPeriod?.endDate) {
-      const now = new Date();
-      const endDate = new Date(transaction.contractPeriod.endDate);
-      isExpired = now > endDate;
-      
-      if (isExpired) {
+      if (isTransactionExpired(transaction.contractPeriod.endDate)) {
         return res.json({ 
           valid: false, 
           message: 'Purchase code has expired. You cannot play the game.',
@@ -835,7 +904,7 @@ router.post('/use-purchase-code', authenticateToken, async (req, res) => {
 
     // Check if transaction has expired
     if (transaction.contractPeriod?.endDate) {
-      if (new Date() > new Date(transaction.contractPeriod.endDate)) {
+      if (isTransactionExpired(transaction.contractPeriod.endDate)) {
         return res.status(400).json({ error: 'This purchase code has expired' });
       }
     }
@@ -937,7 +1006,7 @@ router.post('/start-purchase-game-play', authenticateToken, async (req, res) => 
 
     // Check if transaction has expired
     if (transaction.contractPeriod?.endDate) {
-      if (new Date() > new Date(transaction.contractPeriod.endDate)) {
+      if (isTransactionExpired(transaction.contractPeriod.endDate)) {
         return res.status(400).json({ error: 'This purchase code has expired' });
       }
     }

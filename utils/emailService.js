@@ -2,15 +2,31 @@ const nodemailer = require('nodemailer');
 
 // Email configuration - update these in your .env file
 const createTransporter = () => {
-  return nodemailer.createTransport({
+  const config = {
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: process.env.SMTP_PORT || 587,
+    port: parseInt(process.env.SMTP_PORT) || 587,
     secure: false, // true for 465, false for other ports
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
+    // Add connection timeout and greeting timeout
+    connectionTimeout: 10000, // 10 seconds
+    greetingTimeout: 10000, // 10 seconds
+    // Add debug option for troubleshooting (only in development)
+    debug: process.env.NODE_ENV === 'development',
+    logger: process.env.NODE_ENV === 'development'
+  };
+
+  console.log('Creating SMTP transporter:', {
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    user: config.auth.user ? `${config.auth.user.substring(0, 3)}***` : 'Not set',
+    hasPassword: !!config.auth.pass
   });
+
+  return nodemailer.createTransport(config);
 };
 
 // Website color theme
@@ -461,9 +477,421 @@ The Konfydence Team
   }
 };
 
+// Helper functions for transaction email
+const getTransactionTypeLabel = (type) => {
+  const labels = {
+    'b2c_purchase': 'Individual Purchase',
+    'b2c_renewal': 'Individual Renewal',
+    'b2b_contract': 'Business Contract',
+    'b2e_contract': 'Education Contract'
+  };
+  return labels[type] || type;
+};
+
+const getOrganizationTypeLabel = (type) => {
+  const labels = {
+    'company': 'Company',
+    'bank': 'Bank',
+    'school': 'School',
+    'govt': 'Government',
+    'other': 'Organization'
+  };
+  return labels[type] || 'Organization';
+};
+
+const getPackageTypeLabel = (type) => {
+  const labels = {
+    'digital': 'Digital',
+    'physical': 'Physical',
+    'digital_physical': 'Digital + Physical',
+    'standard': 'Standard',
+    'renewal': 'Renewal'
+  };
+  return labels[type] || type || 'Standard';
+};
+
+const calculateExpiryInfo = (endDate) => {
+  if (!endDate) return null;
+  const now = new Date();
+  const expiry = new Date(endDate);
+  const diffTime = expiry - now;
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  
+  if (diffDays < 0) {
+    return { status: 'expired', days: 0, message: 'Expired' };
+  } else if (diffDays === 0) {
+    return { status: 'today', days: 0, message: 'Expires today' };
+  } else if (diffDays === 1) {
+    return { status: 'tomorrow', days: 1, message: 'Expires tomorrow' };
+  } else if (diffDays <= 30) {
+    return { status: 'soon', days: diffDays, message: `Expires in ${diffDays} days` };
+  } else if (diffDays <= 365) {
+    const months = Math.floor(diffDays / 30);
+    return { status: 'active', days: diffDays, message: `Expires in ${months} month${months > 1 ? 's' : ''} (${diffDays} days)` };
+  } else {
+    const years = Math.floor(diffDays / 365);
+    const remainingDays = diffDays % 365;
+    return { status: 'active', days: diffDays, message: `Expires in ${years} year${years > 1 ? 's' : ''}${remainingDays > 0 ? ` and ${remainingDays} days` : ''}` };
+  }
+};
+
+const createTransactionSuccessEmailTemplate = (transaction, user, package, organization = null) => {
+  const formatDate = (date) => {
+    if (!date) return 'N/A';
+    return new Date(date).toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric' 
+    });
+  };
+
+  const isOrganizationTransaction = transaction.type === 'b2b_contract' || transaction.type === 'b2e_contract';
+  const organizationName = organization?.name || (isOrganizationTransaction ? 'Your Organization' : null);
+  const organizationType = organization?.type ? getOrganizationTypeLabel(organization.type) : null;
+  
+  // Get package type (prefer packageType, fallback to type, then category)
+  const packageType = transaction.packageType || package.packageType || package.type || package.category || 'standard';
+  const packageTypeLabel = getPackageTypeLabel(packageType);
+  
+  // Calculate expiry information
+  const expiryInfo = transaction.contractPeriod?.endDate ? calculateExpiryInfo(transaction.contractPeriod.endDate) : null;
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment Successful - Your Unique Code</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: ${colors.background};">
+  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: ${colors.background}; padding: 20px;">
+    <tr>
+      <td align="center" style="padding: 20px 0;">
+        <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: ${colors.white}; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%); padding: 30px; text-align: center;">
+              <h1 style="margin: 0; color: ${colors.white}; font-size: 28px; font-weight: 700;">Konfydence</h1>
+              <p style="margin: 5px 0 0 0; color: ${colors.accent}; font-size: 14px; font-weight: 500;">Safer Digital Decisions</p>
+            </td>
+          </tr>
+          
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px 30px;">
+              <h2 style="margin: 0 0 20px 0; color: ${colors.primary}; font-size: 24px; font-weight: 700;">Payment Successful!</h2>
+              
+              <p style="margin: 0 0 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">
+                Dear ${user.name || 'Valued Customer'},
+              </p>
+              
+              <p style="margin: 0 0 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">
+                Thank you for your purchase! Your payment has been successfully processed.
+              </p>
+
+              <!-- Note Section -->
+              <div style="background-color: ${colors.background}; padding: 20px; border-radius: 6px; margin: 20px 0;">
+                <h3 style="margin: 0 0 10px 0; color: ${colors.primary}; font-size: 16px; font-weight: 600;">Note</h3>
+                <p style="margin: 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                  This unique code is for you. You can use this code to play the game.
+                </p>
+              </div>
+              
+              <!-- Unique Code Badge -->
+              <table role="presentation" style="width: 100%; margin: 30px 0; border-collapse: collapse;">
+                <tr>
+                  <td style="background: linear-gradient(135deg, ${colors.secondary} 0%, ${colors.primary} 100%); color: ${colors.white}; padding: 20px; border-radius: 8px; text-align: center;">
+                    <p style="margin: 0 0 10px 0; color: ${colors.white}; font-size: 14px; font-weight: 500; text-transform: uppercase; letter-spacing: 1px;">Your Unique Code</p>
+                    <p style="margin: 0; color: ${colors.white}; font-size: 32px; font-weight: 700; letter-spacing: 2px; font-family: 'Courier New', monospace;">${transaction.uniqueCode}</p>
+                  </td>
+                </tr>
+              </table>
+              
+              <!-- Package Details -->
+              <div style="background-color: ${colors.background}; padding: 20px; border-radius: 6px; margin: 20px 0;">
+                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">Package Details</h3>
+                <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Package Name:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${package.name || 'N/A'}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Package Type:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">
+                      <span style="background-color: ${packageType === 'physical' ? '#FF6B6B' : packageType === 'digital' ? '#4ECDC4' : '#95E1D3'}; color: white; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; text-transform: uppercase;">
+                        ${packageTypeLabel}
+                      </span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Transaction Type:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${getTransactionTypeLabel(transaction.type)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Amount Paid:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.primary}; font-size: 16px; font-weight: 700;">
+                      ${transaction.currency || 'EUR'}${transaction.amount || 0}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Max Seats:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px; font-weight: 600;">${transaction.maxSeats || 5} seat${(transaction.maxSeats || 5) > 1 ? 's' : ''}</td>
+                  </tr>
+                  ${transaction.contractPeriod?.startDate ? `
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Contract Start Date:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${formatDate(transaction.contractPeriod.startDate)}</td>
+                  </tr>
+                  ` : ''}
+                  ${transaction.contractPeriod?.endDate ? `
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Contract End Date:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${formatDate(transaction.contractPeriod.endDate)}</td>
+                  </tr>
+                  ` : ''}
+                </table>
+              </div>
+
+              ${expiryInfo ? `
+              <!-- Expiry Information -->
+              <div style="background-color: ${expiryInfo.status === 'expired' ? '#FFE5E5' : expiryInfo.status === 'soon' || expiryInfo.status === 'today' ? '#FFF4E5' : '#E5F5F0'}; border-left: 4px solid ${expiryInfo.status === 'expired' ? '#FF6B6B' : expiryInfo.status === 'soon' || expiryInfo.status === 'today' ? '#FFA500' : '#4ECDC4'}; padding: 20px; margin: 20px 0; border-radius: 4px;">
+                <h3 style="margin: 0 0 10px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">Package Expiry Information</h3>
+                <p style="margin: 0 0 10px 0; color: ${colors.text}; font-size: 16px; font-weight: 600;">
+                  ${expiryInfo.message}
+                </p>
+                ${transaction.contractPeriod?.endDate ? `
+                <p style="margin: 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                  <strong>Expiry Date:</strong> ${formatDate(transaction.contractPeriod.endDate)}
+                </p>
+                ` : ''}
+                ${packageType === 'physical' ? `
+                <p style="margin: 10px 0 0 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                  <strong>Note:</strong> This is a physical package. You will receive physical cards for offline game play.
+                </p>
+                ` : packageType === 'digital' ? `
+                <p style="margin: 10px 0 0 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                  <strong>Note:</strong> This is a digital package. You can play the game online using your unique code.
+                </p>
+                ` : packageType === 'digital_physical' ? `
+                <p style="margin: 10px 0 0 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                  <strong>Note:</strong> This package includes both digital and physical components. You can play online and also receive physical cards.
+                </p>
+                ` : ''}
+              </div>
+              ` : ''}
+              
+              <!-- Instructions -->
+              <div style="background-color: #FFF9E6; border-left: 4px solid ${colors.accent}; padding: 20px; margin: 20px 0; border-radius: 4px;">
+                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">How to Use Your Code</h3>
+                <ol style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
+                  <li style="margin-bottom: 10px;">Visit the game page on Konfydence website</li>
+                  <li style="margin-bottom: 10px;">Enter your unique code: <strong style="color: ${colors.primary}; font-family: 'Courier New', monospace;">${transaction.uniqueCode}</strong></li>
+                  <li style="margin-bottom: 10px;">Start playing the game with your ${transaction.maxSeats || 5} seat${(transaction.maxSeats || 5) > 1 ? 's' : ''}</li>
+                  <li>Each seat can be used once to play the game</li>
+                </ol>
+              </div>
+              
+              <!-- Important Notes -->
+              <div style="margin: 30px 0;">
+                <p style="margin: 0 0 10px 0; color: ${colors.text}; font-size: 14px; font-weight: 600;">Important Notes:</p>
+                <ul style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                  <li style="margin-bottom: 8px;">Keep this code safe and secure</li>
+                  <li style="margin-bottom: 8px;">Package Type: <strong>${packageTypeLabel}</strong></li>
+                  <li style="margin-bottom: 8px;">You have ${transaction.maxSeats || 5} seat${(transaction.maxSeats || 5) > 1 ? 's' : ''} available for game play</li>
+                  <li style="margin-bottom: 8px;">Each seat can only be used once</li>
+                  ${expiryInfo ? `
+                  <li style="margin-bottom: 8px;">Package Expiry: <strong>${expiryInfo.message}</strong>${transaction.contractPeriod?.endDate ? ` (${formatDate(transaction.contractPeriod.endDate)})` : ''}</li>
+                  ` : transaction.contractPeriod?.endDate ? `
+                  <li style="margin-bottom: 8px;">Your code is valid until ${formatDate(transaction.contractPeriod.endDate)}</li>
+                  ` : ''}
+                  ${packageType === 'physical' ? `
+                  <li style="margin-bottom: 8px;">Physical cards will be delivered separately. Online game play is not available for physical packages.</li>
+                  ` : packageType === 'digital_physical' ? `
+                  <li style="margin-bottom: 8px;">You can play online immediately. Physical cards will be delivered separately.</li>
+                  ` : ''}
+                </ul>
+              </div>
+              
+              <!-- Contact Info -->
+              <div style="border-top: 2px solid ${colors.background}; padding-top: 20px; margin-top: 30px;">
+                <p style="margin: 0 0 10px 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                  If you have any questions or need assistance, please don't hesitate to contact us.
+                </p>
+                <p style="margin: 0; color: ${colors.secondary}; font-size: 14px; font-weight: 600;">
+                  Best regards,<br>
+                  The Konfydence Team
+                </p>
+              </div>
+            </td>
+          </tr>
+          
+          <!-- Footer -->
+          <tr>
+            <td style="background-color: ${colors.primary}; padding: 20px 30px; text-align: center;">
+              <p style="margin: 0; color: ${colors.white}; font-size: 12px;">
+                © ${new Date().getFullYear()} Konfydence. All rights reserved.
+              </p>
+              <p style="margin: 5px 0 0 0; color: ${colors.accent}; font-size: 12px;">
+                Safer Digital Decisions
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `;
+};
+
+const sendTransactionSuccessEmail = async (transaction, user, package, organization = null) => {
+  try {
+    // Check if email service is configured
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.warn('Email service not configured. Skipping transaction success email.');
+      return { success: false, message: 'Email service not configured' };
+    }
+
+    // Check if user has email
+    if (!user.email) {
+      console.warn('User does not have email address. Skipping email send.');
+      return { success: false, message: 'User email not available' };
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(user.email)) {
+      console.error('Invalid email format:', user.email);
+      return { success: false, message: 'Invalid email format' };
+    }
+
+    // Calculate package type and expiry info before creating template
+    const packageType = transaction.packageType || package.packageType || package.type || package.category || 'standard';
+    const packageTypeLabel = getPackageTypeLabel(packageType);
+    const expiryInfo = transaction.contractPeriod?.endDate ? calculateExpiryInfo(transaction.contractPeriod.endDate) : null;
+
+    const transporter = createTransporter();
+    const emailHtml = createTransactionSuccessEmailTemplate(transaction, user, package, organization);
+
+    const isOrganizationTransaction = transaction.type === 'b2b_contract' || transaction.type === 'b2e_contract';
+    const organizationName = organization?.name || (isOrganizationTransaction ? 'Your Organization' : null);
+    const organizationType = organization?.type;
+
+    // Create text version for email clients that don't support HTML
+    const textVersion = `Dear ${user.name || 'Valued Customer'},
+
+Thank you for your purchase! Your payment has been successfully processed.
+
+Note:
+This unique code is for you. You can use this code to play the game.
+
+Your Unique Code: ${transaction.uniqueCode}
+
+Package Details:
+- Package Name: ${package?.name || 'N/A'
+  
+}
+- Package Type: ${packageTypeLabel}
+- Transaction Type: ${getTransactionTypeLabel(transaction.type)}
+- Amount Paid: ${transaction.currency || 'EUR'}${transaction.amount || 0}
+- Max Seats: ${transaction.maxSeats || 5} seat${(transaction.maxSeats || 5) > 1 ? 's' : ''}
+${transaction.contractPeriod?.startDate ? `- Contract Start Date: ${new Date(transaction.contractPeriod.startDate).toLocaleDateString()}` : ''}
+${transaction.contractPeriod?.endDate ? `- Contract End Date: ${new Date(transaction.contractPeriod.endDate).toLocaleDateString()}` : ''}
+${expiryInfo ? `- Package Expiry: ${expiryInfo.message}` : ''}
+
+How to Use Your Code:
+1. Visit the game page on Konfydence website
+2. Enter your unique code: ${transaction.uniqueCode}
+3. Start playing the game with your ${transaction.maxSeats || 5} seat${(transaction.maxSeats || 5) > 1 ? 's' : ''}
+4. Each seat can be used once to play the game
+
+Important Notes:
+- Keep this code safe and secure
+- Package Type: ${packageTypeLabel}
+- You have ${transaction.maxSeats || 5} seat${(transaction.maxSeats || 5) > 1 ? 's' : ''} available for game play
+- Each seat can only be used once
+${expiryInfo ? `- Package Expiry: ${expiryInfo.message}${transaction.contractPeriod?.endDate ? ` (${new Date(transaction.contractPeriod.endDate).toLocaleDateString()})` : ''}` : transaction.contractPeriod?.endDate ? `- Your code is valid until ${new Date(transaction.contractPeriod.endDate).toLocaleDateString()}` : ''}
+${packageType === 'physical' ? `- Physical cards will be delivered separately. Online game play is not available for physical packages.` : packageType === 'digital_physical' ? `- You can play online immediately. Physical cards will be delivered separately.` : ''}
+
+If you have any questions or need assistance, please don't hesitate to contact us.
+
+Best regards,
+The Konfydence Team`;
+
+    const mailOptions = {
+      from: `"Konfydence" <${process.env.SMTP_USER}>`,
+      to: user.email,
+      subject: `Payment Successful - Your Unique Code: ${transaction.uniqueCode}`,
+      html: emailHtml,
+      text: textVersion,
+      // Add headers similar to verification emails
+      headers: {
+        'X-Priority': '1',
+        'X-MSMail-Priority': 'High',
+        'Importance': 'high'
+      }
+    };
+
+    console.log('Attempting to send transaction success email:', {
+      to: user.email,
+      from: process.env.SMTP_USER,
+      uniqueCode: transaction.uniqueCode,
+      packageName: package.name,
+      smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com'
+    });
+
+    const info = await transporter.sendMail(mailOptions);
+    
+    console.log('Transaction success email sent successfully:', {
+      messageId: info.messageId,
+      to: user.email,
+      from: process.env.SMTP_USER,
+      uniqueCode: transaction.uniqueCode,
+      accepted: info.accepted,
+      rejected: info.rejected,
+      response: info.response
+    });
+
+    // Log warning if email was rejected
+    if (info.rejected && info.rejected.length > 0) {
+      console.warn('Email was rejected by SMTP server:', {
+        rejected: info.rejected,
+        messageId: info.messageId,
+        to: user.email
+      });
+    }
+
+    // Log important note about email delivery
+    if (info.accepted && info.accepted.length > 0) {
+      console.log('Email accepted by SMTP server. Note: Email may take a few minutes to arrive. Please check spam folder if not received.');
+    }
+
+    return { 
+      success: true, 
+      messageId: info.messageId,
+      accepted: info.accepted,
+      rejected: info.rejected
+    };
+  } catch (error) {
+    console.error('Error sending transaction success email:', {
+      error: error.message,
+      stack: error.stack,
+      to: user?.email,
+      uniqueCode: transaction?.uniqueCode,
+      smtpUser: process.env.SMTP_USER ? 'Set' : 'Missing',
+      smtpPass: process.env.SMTP_PASS ? 'Set' : 'Missing',
+      smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com'
+    });
+    return { success: false, error: error.message };
+  }
+};
+
 module.exports = {
   sendStatusUpdateEmail,
   sendCustomPackageCreatedEmail,
+  sendTransactionSuccessEmail,
   createTransporter,
 };
 

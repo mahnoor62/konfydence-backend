@@ -147,6 +147,20 @@ router.post('/create', authenticateToken, async (req, res) => {
   }
 });
 
+// Check if user has ever used a free trial
+router.get('/has-used-trial', authenticateToken, async (req, res) => {
+  try {
+    const hasUsedTrial = await FreeTrial.exists({
+      userId: req.userId,
+    });
+
+    res.json({ hasUsedTrial: !!hasUsedTrial });
+  } catch (error) {
+    console.error('Error checking free trial usage:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Get user's free trial
 router.get('/my-trial', authenticateToken, async (req, res) => {
   try {
