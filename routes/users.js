@@ -6,8 +6,57 @@ const User = require('../models/User');
 const Transaction = require('../models/Transaction');
 const OrgUser = require('../models/OrgUser');
 const Organization = require('../models/Organization');
+const School = require('../models/School');
 
 const router = express.Router();
+
+// Helper function to safely extract ID from req.params.id
+const extractId = (paramId) => {
+  if (!paramId) return null;
+  
+  // If it's already a string, validate and return
+  if (typeof paramId === 'string') {
+    const trimmed = paramId.trim();
+    // Check if it's a valid ObjectId format (24 hex characters)
+    if (/^[0-9a-fA-F]{24}$/.test(trimmed)) {
+      return trimmed;
+    }
+    // If it's "[object Object]" string, return null
+    if (trimmed === '[object Object]' || trimmed.includes('[object')) {
+      return null;
+    }
+    return trimmed;
+  }
+  
+  // If it's an object, try to extract ID
+  if (typeof paramId === 'object' && paramId !== null) {
+    // Try _id first (Mongoose ObjectId)
+    if (paramId._id) {
+      const id = paramId._id.toString ? paramId._id.toString() : String(paramId._id);
+      if (id && id !== '[object Object]' && /^[0-9a-fA-F]{24}$/.test(id.trim())) {
+        return id.trim();
+      }
+    }
+    // Try id property
+    if (paramId.id) {
+      const id = paramId.id.toString ? paramId.id.toString() : String(paramId.id);
+      if (id && id !== '[object Object]' && /^[0-9a-fA-F]{24}$/.test(id.trim())) {
+        return id.trim();
+      }
+    }
+    // Last resort: try toString, but validate it
+    try {
+      const str = paramId.toString();
+      if (str && str !== '[object Object]' && !str.includes('[object') && /^[0-9a-fA-F]{24}$/.test(str.trim())) {
+        return str.trim();
+      }
+    } catch (e) {
+      // Ignore toString errors
+    }
+  }
+  
+  return null;
+};
 
 // Get all memberships across all users
 router.get('/memberships', authenticateToken, checkPermission('users'), async (req, res) => {
@@ -185,21 +234,51 @@ router.get('/', authenticateToken, checkPermission('users'), async (req, res) =>
 
 router.get('/:id', authenticateToken, checkPermission('users'), async (req, res) => {
   try {
-    const user = await User.findById(req.params.id)
+    const currentUser = await User.findById(req.userId);
+    if (!currentUser) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    // Ensure id is a string, not an object
+    const userId = extractId(req.params.id);
+    if (!userId) {
+      return res.status(400).json({ error: 'Invalid user ID format' });
+    }
+    
+    const user = await User.findById(userId)
       .populate('memberships.packageId')
       .populate('progress.cardProgress.cardId')
-      .populate('progress.packageProgress.packageId');
+      .populate('progress.packageProgress.packageId')
+      .populate('organizationId', 'name uniqueCode type ownerId')
+      .populate('schoolId', 'name uniqueCode type ownerId');
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const transactions = await Transaction.find({ userId: req.params.id })
+    const isAdmin = currentUser.role === 'admin';
+    const isOwnerRole = currentUser.role === 'b2b_user' || currentUser.role === 'b2e_user';
+
+    const ownsOrg = user.organizationId && user.organizationId.ownerId && user.organizationId.ownerId.toString() === currentUser._id.toString();
+    const ownsSchool = user.schoolId && user.schoolId.ownerId && user.schoolId.ownerId.toString() === currentUser._id.toString();
+
+    const sameOrg = user.organizationId && currentUser.organizationId && user.organizationId._id.toString() === currentUser.organizationId.toString();
+    const sameSchool = user.schoolId && currentUser.schoolId && user.schoolId._id.toString() === currentUser.schoolId.toString();
+
+    const isOwner = isOwnerRole && (ownsOrg || ownsSchool || sameOrg || sameSchool);
+
+    if (!isAdmin && !isOwner && currentUser._id.toString() !== user._id.toString()) {
+      return res.status(403).json({ error: 'You do not have permission to view this user' });
+    }
+
+    const transactions = await Transaction.find({ userId: userId })
       .populate('packageId', 'name')
       .sort({ createdAt: -1 });
 
+    // Return user data with proper structure
+    const userData = user.toObject();
     res.json({
-      user,
+      ...userData,
       transactions
     });
   } catch (error) {
@@ -215,8 +294,21 @@ router.put('/:id', authenticateToken, checkPermission('users'), async (req, res)
     if (name !== undefined) updateData.name = name;
     if (isActive !== undefined) updateData.isActive = isActive;
 
+    // Ensure id is a string, not an object
+    let userId = extractId(req.params.id);
+    if (!userId) {
+      return res.status(400).json({ error: 'Invalid user ID format' });
+    }
+    if (typeof userId === 'object' && userId !== null) {
+      userId = userId._id || userId.id || (userId.toString && userId.toString() !== '[object Object]' ? userId.toString() : null);
+    }
+    if (!userId || typeof userId !== 'string') {
+      return res.status(400).json({ error: 'Invalid user ID format' });
+    }
+    userId = userId.toString().trim();
+    
     const user = await User.findByIdAndUpdate(
-      req.params.id,
+      userId,
       updateData,
       { new: true, runValidators: true }
     );
@@ -232,22 +324,102 @@ router.put('/:id', authenticateToken, checkPermission('users'), async (req, res)
   }
 });
 
+// Terminate member membership (remove from organization/school)
+router.delete('/:id/membership', authenticateToken, async (req, res) => {
+  try {
+    const currentUser = await User.findById(req.userId);
+    if (!currentUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Ensure id is a string, not an object
+    const memberId = extractId(req.params.id);
+    if (!memberId) {
+      return res.status(400).json({ error: 'Invalid member ID format' });
+    }
+    
+    const member = await User.findById(memberId);
+    if (!member) {
+      return res.status(404).json({ error: 'Member not found' });
+    }
+
+    // Check if current user owns the organization/school
+    let isOwner = false;
+    if (currentUser.organizationId && member.organizationId) {
+      const organization = await Organization.findOne({ _id: currentUser.organizationId, ownerId: currentUser._id });
+      isOwner = !!organization && organization._id.toString() === member.organizationId.toString();
+    }
+    
+    if (!isOwner && currentUser.schoolId && member.schoolId) {
+      const school = await School.findOne({ _id: currentUser.schoolId, ownerId: currentUser._id });
+      isOwner = !!school && school._id.toString() === member.schoolId.toString();
+    }
+
+    if (!isOwner && currentUser.role !== 'admin') {
+      return res.status(403).json({ error: 'You are not authorized to remove this member' });
+    }
+
+    // Get organization/school name before removing
+    let organizationName = null;
+    let schoolName = null;
+    
+    if (member.organizationId) {
+      const org = await Organization.findById(member.organizationId);
+      organizationName = org?.name || null;
+    }
+    
+    if (member.schoolId) {
+      const school = await School.findById(member.schoolId);
+      schoolName = school?.name || null;
+    }
+
+    // Remove member from organization/school
+    member.organizationId = null;
+    member.schoolId = null;
+    member.memberStatus = 'rejected';
+    await member.save();
+
+    // Delete OrgUser record if exists
+    await OrgUser.deleteMany({ userId: member._id });
+
+    // Send termination email
+    try {
+      const { sendMembershipTerminationEmail } = require('../utils/emailService');
+      await sendMembershipTerminationEmail(member, organizationName, schoolName);
+    } catch (emailError) {
+      console.error('Error sending termination email:', emailError);
+      // Don't fail the request if email fails
+    }
+
+    res.json({ message: 'Member membership terminated successfully. The member has been notified via email.' });
+  } catch (error) {
+    console.error('Error terminating membership:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.delete('/:id', authenticateToken, checkPermission('users'), async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
+    // Ensure id is a string, not an object
+    const userId = extractId(req.params.id);
+    if (!userId) {
+      return res.status(400).json({ error: 'Invalid user ID format' });
+    }
+    
+    const user = await User.findById(userId);
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
     // Delete related transactions
-    await Transaction.deleteMany({ userId: req.params.id });
+    await Transaction.deleteMany({ userId: userId });
 
     // Delete OrgUser records if user is part of organization
-    await OrgUser.deleteMany({ userId: req.params.id });
+    await OrgUser.deleteMany({ userId: userId });
 
     // Delete the user
-    await User.findByIdAndDelete(req.params.id);
+    await User.findByIdAndDelete(userId);
 
     res.json({ message: 'User deleted successfully' });
   } catch (error) {

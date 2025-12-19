@@ -62,14 +62,27 @@ const PackageSchema = new Schema(
       enum: ['active', 'archived'],
       default: 'active'
     },
+    isPredefined: {
+      type: Boolean,
+      default: false,
+      comment: 'If true, this is a predefined package that cannot be deleted'
+    },
     maxSeats: {
       type: Number,
       default: 0,
       min: 1
     },
-    expiryDate: {
-      type: Date,
-      comment: 'Package expiry date - when this package expires'
+    expiryTime: {
+      type: Number,
+      default: null,
+      min: 0,
+      comment: 'Package expiry duration (number of units)'
+    },
+    expiryTimeUnit: {
+      type: String,
+      enum: ['months', 'years'],
+      default: null,
+      comment: 'Package expiry time unit (months or years)'
     }
   },
   { timestamps: true }

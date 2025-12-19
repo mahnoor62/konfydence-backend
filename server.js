@@ -107,8 +107,10 @@ app.use('/api/custom-package-requests', require('./routes/customPackageRequests'
 app.use('/api/card-registrations', require('./routes/cardRegistrations'));
 app.use('/api/referrals', require('./routes/referrals'));
 app.use('/api/organizations', require('./routes/organizations'));
+app.use('/api/schools', require('./routes/schools'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/user', require('./routes/userDashboard'));
+app.use('/api/user/organizations', require('./routes/userOrganizations'));
 app.use('/api/transactions', require('./routes/transactions'));
 // Demo route removed - using FreeTrial instead
 // app.use('/api/demos', require('./routes/demos'));

@@ -8,7 +8,47 @@ const CustomPackage = require('../models/CustomPackage');
 
 const router = express.Router();
 
-router.get('/', authenticateToken, checkPermission('organizations'), async (req, res) => {
+// Public route to get organization by code (for member registration/login)
+router.get('/code/:code', async (req, res) => {
+  try {
+    const organization = await Organization.findOne({ 
+      uniqueCode: req.params.code.toUpperCase() 
+    }).select('name uniqueCode type');
+
+    if (!organization) {
+      return res.status(404).json({ error: 'Organization not found' });
+    }
+
+    res.json(organization);
+  } catch (error) {
+    console.error('Error fetching organization by code:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Public route to search organizations by name (for member registration)
+router.get('/', async (req, res) => {
+  try {
+    const { search } = req.query;
+    const query = {};
+
+    if (search) {
+      query.name = { $regex: search, $options: 'i' };
+    }
+
+    const organizations = await Organization.find(query)
+      .select('name uniqueCode type')
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    res.json(organizations);
+  } catch (error) {
+    console.error('Error searching organizations:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/admin', authenticateToken, checkPermission('organizations'), async (req, res) => {
   try {
     const { segment, status, type, search } = req.query;
     const query = {};
@@ -48,7 +88,7 @@ router.get('/', authenticateToken, checkPermission('organizations'), async (req,
   }
 });
 
-router.get('/:id', authenticateToken, checkPermission('organizations'), async (req, res) => {
+router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const organization = await Organization.findById(req.params.id);
 
@@ -56,6 +96,49 @@ router.get('/:id', authenticateToken, checkPermission('organizations'), async (r
       return res.status(404).json({ error: 'Organization not found' });
     }
 
+    // Check if current user is owner, member, or admin
+    const User = require('../models/User');
+    const Admin = require('../models/Admin');
+    let currentUser = null;
+    let isAdmin = false;
+    
+    // Check if it's an admin token first
+    if (req.userId) {
+      // Try to find admin first (admin tokens use adminId)
+      const admin = await Admin.findById(req.userId);
+      if (admin) {
+        isAdmin = true;
+      } else {
+        // If not admin, try to find regular user
+        currentUser = await User.findById(req.userId);
+        if (currentUser) {
+          isAdmin = currentUser.role === 'admin' || currentUser.role === 'super_admin';
+        }
+      }
+    }
+
+    // For admin panel access, allow if token is valid (authenticated)
+    // Admins can access all organizations
+    if (!currentUser && !isAdmin) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    const isOwner = currentUser && organization.ownerId && organization.ownerId.toString() === currentUser._id.toString();
+    const isMember = currentUser && currentUser.organizationId && currentUser.organizationId.toString() === organization._id.toString();
+
+    // If member (not owner), only return name and code
+    if (isMember && !isOwner && !isAdmin) {
+      return res.json({
+        organization: {
+          _id: organization._id,
+          name: organization.name,
+          uniqueCode: organization.uniqueCode
+        },
+        orgUsers: [] // Don't show other members to members
+      });
+    }
+
+    // For owners/admins, return full details
     // Remove duplicate custom package IDs from database array
     if (organization.customPackages && organization.customPackages.length > 0) {
       const seen = new Set();
@@ -83,14 +166,75 @@ router.get('/:id', authenticateToken, checkPermission('organizations'), async (r
         select: 'name description'
       }
     });
+    
+    // Populate transactionIds array
+    await organization.populate({
+      path: 'transactionIds',
+      select: '_id type status amount currency createdAt packageId customPackageId'
+    });
 
-    const orgUsers = await OrgUser.find({ organizationId: req.params.id })
-      .populate('userId', 'name email')
+    // First, get all users who have joined this organization (approved members)
+    const allJoinedMembers = await User.find({ 
+      organizationId: req.params.id,
+      role: { $in: ['b2b_member', 'b2e_member'] },
+      memberStatus: 'approved'
+    }).select('name email memberStatus isActive createdAt memberApprovedAt role _id');
+
+    // Merge with organization.members array for robustness
+    const memberIds = [
+      ...new Set([
+        ...allJoinedMembers.map(m => m._id.toString()),
+        ...(organization.members || []).map(m => m.toString())
+      ])
+    ];
+
+    // Fetch OrgUser records for these members
+    const orgUsers = await OrgUser.find({ 
+      organizationId: req.params.id,
+      ...(memberIds.length > 0 ? { userId: { $in: memberIds } } : {})
+    })
+      .populate('userId', 'name email memberStatus isActive createdAt memberApprovedAt role')
       .populate('assignedCustomPackageIds');
+
+    // Combine OrgUser data with member data
+    const memberMap = new Map();
+    
+    // Add members from OrgUser
+    orgUsers.forEach(orgUser => {
+      if (orgUser.userId) {
+        const userId = orgUser.userId._id.toString();
+        memberMap.set(userId, {
+          _id: orgUser._id,
+          userId: orgUser.userId,
+          organizationId: orgUser.organizationId,
+          assignedCustomPackageIds: orgUser.assignedCustomPackageIds,
+          createdAt: orgUser.createdAt,
+          updatedAt: orgUser.updatedAt
+        });
+      }
+    });
+
+    // Add members from User table (approved members) who are not in OrgUser
+    allJoinedMembers.forEach(user => {
+      const userId = user._id.toString();
+      if (!memberMap.has(userId)) {
+        // Create a virtual OrgUser-like structure
+        memberMap.set(userId, {
+          userId: user,
+          organizationId: req.params.id,
+          assignedCustomPackageIds: [],
+          createdAt: user.createdAt || new Date(),
+          updatedAt: user.updatedAt || new Date()
+        });
+      }
+    });
+
+    // Convert map to array
+    const allOrgUsers = Array.from(memberMap.values());
 
     res.json({
       organization,
-      orgUsers
+      orgUsers: allOrgUsers
     });
   } catch (error) {
     console.error('Error fetching organization:', error);
@@ -113,14 +257,39 @@ router.post(
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
+        return res.status(400).json({ 
+          error: 'Validation failed',
+          details: errors.array()
+        });
       }
 
-      const organization = await Organization.create(req.body);
+      // Set ownerId from authenticated user (admin creating the organization)
+      const organizationData = {
+        ...req.body,
+        ownerId: req.userId // Admin user creating the organization
+      };
+
+      const organization = await Organization.create(organizationData);
       res.status(201).json(organization);
     } catch (error) {
       console.error('Error creating organization:', error);
-      res.status(500).json({ error: 'Server error' });
+      
+      // Return detailed error message
+      if (error.name === 'ValidationError') {
+        const validationErrors = Object.values(error.errors).map(err => ({
+          field: err.path,
+          message: err.message
+        }));
+        return res.status(400).json({ 
+          error: 'Validation failed',
+          details: validationErrors
+        });
+      }
+      
+      res.status(500).json({ 
+        error: 'Server error',
+        message: error.message || 'Failed to create organization'
+      });
     }
   }
 );

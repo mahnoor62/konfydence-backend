@@ -10,17 +10,94 @@ const { sendCustomPackageCreatedEmail } = require('../utils/emailService');
 
 const router = express.Router();
 
-router.get('/', authenticateToken, checkPermission('organizations'), async (req, res) => {
+router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { organizationId } = req.query;
+    const { organizationId, schoolId } = req.query;
     const query = {};
-    if (organizationId) query.organizationId = organizationId;
+
+    // Super admin can see all, but organization/school admins see only their packages
+    const User = require('../models/User');
+    const Admin = require('../models/Admin');
+    const School = require('../models/School');
+    const user = await User.findById(req.userId);
+    const admin = await Admin.findById(req.userId);
+    const isSuperAdmin = admin && admin.isActive;
+
+    // Initialize owner IDs (used for logging and query building)
+    let ownerOrgId = null;
+    let ownerSchoolId = null;
+
+    // If not super admin, filter by user's organization/school
+    if (!isSuperAdmin && user) {
+      // Check if user is owner of any organization/school
+
+      // Find organizations where user is owner
+      const orgAsOwner = await Organization.findOne({ ownerId: user._id });
+      if (orgAsOwner) {
+        ownerOrgId = orgAsOwner._id;
+      }
+
+      // Find schools where user is owner
+      const schoolAsOwner = await School.findOne({ ownerId: user._id });
+      if (schoolAsOwner) {
+        ownerSchoolId = schoolAsOwner._id;
+      }
+
+      // Build query: user's organizationId/schoolId OR user's owned organization/school
+      const orgIds = [];
+      const schoolIds = [];
+
+      if (user.organizationId) {
+        orgIds.push(user.organizationId);
+      }
+      if (ownerOrgId) {
+        orgIds.push(ownerOrgId);
+      }
+      if (user.schoolId) {
+        schoolIds.push(user.schoolId);
+      }
+      if (ownerSchoolId) {
+        schoolIds.push(ownerSchoolId);
+      }
+
+      // Use $or to match any of the organization/school IDs
+      if (orgIds.length > 0 || schoolIds.length > 0) {
+        query.$or = [];
+        if (orgIds.length > 0) {
+          query.$or.push({ organizationId: { $in: orgIds } });
+        }
+        if (schoolIds.length > 0) {
+          query.$or.push({ schoolId: { $in: schoolIds } });
+        }
+      } else {
+        // If user has no organization/school, return empty array
+        return res.json([]);
+      }
+    } else {
+      // Super admin can filter by query params
+      if (organizationId) query.organizationId = organizationId;
+      if (schoolId) query.schoolId = schoolId;
+    }
+
+    console.log('🔍 Custom packages query:', JSON.stringify(query, null, 2));
+    console.log('🔍 User ID:', req.userId);
+    console.log('🔍 User organizationId:', user?.organizationId);
+    console.log('🔍 User schoolId:', user?.schoolId);
+    console.log('🔍 Owner Org ID:', ownerOrgId);
+    console.log('🔍 Owner School ID:', ownerSchoolId);
 
     const customPackages = await CustomPackage.find(query)
       .populate('basePackageId', 'name description')
-      .populate('organizationId', 'name segment')
-      .populate('effectiveCardIds', 'title category')
+      .populate('organizationId', 'name uniqueCode segment')
+      .populate('schoolId', 'name uniqueCode')
+      .populate('productIds', 'name description price visibility imageUrl')
       .sort({ createdAt: -1 });
+
+    console.log(`✅ Found ${customPackages.length} custom packages for user ${req.userId}`);
+    customPackages.forEach(cp => {
+      console.log(`  - Package ${cp._id}: name=${cp.name}, status=${cp.status}, orgId=${cp.organizationId?._id || cp.organizationId}, schoolId=${cp.schoolId?._id || cp.schoolId}`);
+    });
+
     res.json(customPackages);
   } catch (error) {
     console.error('Error fetching custom packages:', error);
@@ -33,9 +110,7 @@ router.get('/:id', authenticateToken, checkPermission('organizations'), async (r
     const customPackage = await CustomPackage.findById(req.params.id)
       .populate('basePackageId')
       .populate('organizationId')
-      .populate('effectiveCardIds')
-      .populate('addedCardIds')
-      .populate('removedCardIds');
+      .populate('addedCardIds');
     if (!customPackage) {
       return res.status(404).json({ error: 'Custom package not found' });
     }
@@ -51,7 +126,6 @@ router.post(
   authenticateToken,
   checkPermission('organizations'),
   [
-    body('organizationId').notEmpty(),
     body('basePackageId').notEmpty(),
     body('contractPricing.amount').isNumeric(),
     body('contractPricing.billingType').isIn(['one_time', 'subscription', 'per_seat']),
@@ -71,54 +145,174 @@ router.post(
         return res.status(404).json({ error: 'Base package not found' });
       }
 
-      const organization = await Organization.findById(req.body.organizationId);
-      if (!organization) {
-        return res.status(404).json({ error: 'Organization not found' });
+      // Check if organizationId or schoolId is provided
+      let organization = null;
+      let school = null;
+
+      if (req.body.organizationId) {
+        organization = await Organization.findById(req.body.organizationId);
+        if (!organization) {
+          return res.status(404).json({ error: 'Organization not found' });
+        }
       }
+
+      if (req.body.schoolId) {
+        const School = require('../models/School');
+        school = await School.findById(req.body.schoolId);
+        if (!school) {
+          return res.status(404).json({ error: 'School not found' });
+        }
+      }
+
+      if (!organization && !school) {
+        return res.status(400).json({ error: 'Either organizationId or schoolId is required' });
+      }
+
+      // Log incoming request body for debugging
+      console.log('📦 Creating custom package - Request body:', {
+        customPackageRequestId: req.body.customPackageRequestId,
+        organizationId: req.body.organizationId,
+        schoolId: req.body.schoolId,
+        name: req.body.name
+      });
+
+      // Ensure productIds array is properly formatted
+      let productIds = [];
+      if (req.body.productIds && Array.isArray(req.body.productIds)) {
+        productIds = req.body.productIds.map(id => {
+          // Handle both string IDs and object IDs
+          return typeof id === 'object' ? (id._id || id.id || id) : id;
+        }).filter(id => id); // Remove any null/undefined values
+      } else if (req.body.productId) {
+        // Handle single productId (backward compatibility)
+        productIds = [req.body.productId];
+      }
+      
+      console.log('📦 ProductIds to save:', productIds);
+      console.log('📦 ProductIds count:', productIds.length);
 
       const customPackage = await CustomPackage.create({
         ...req.body,
         name: req.body.name || basePackage.name,
-        description: req.body.description || basePackage.description
+        description: req.body.description || basePackage.description,
+        productIds: productIds.length > 0 ? productIds : req.body.productIds || [] // Ensure productIds array is set
       });
 
       await customPackage.save();
+      
+      console.log('✅ CustomPackage created successfully:', customPackage._id);
+      console.log('📦 Request body customPackageRequestId:', req.body.customPackageRequestId);
+      console.log('📦 Full request body keys:', Object.keys(req.body));
 
-      // Check if package already exists in organization to prevent duplicates
-      if (!organization.customPackages.includes(customPackage._id)) {
-        organization.customPackages.push(customPackage._id);
-        await organization.save();
-      }
-
-      const populated = await CustomPackage.findById(customPackage._id)
-        .populate('basePackageId')
-        .populate('organizationId')
-        .populate('effectiveCardIds')
-        .populate('addedCardIds')
-        .populate('removedCardIds');
-
-      // Send email notification if this package was created from a request
-      // Check if there's a related custom package request
+      // Add custom package to organization's customPackages array
       try {
-        const relatedRequest = await CustomPackageRequest.findOne({
-          organizationName: organization.name,
-          contactEmail: organization.primaryContact?.email?.toLowerCase(),
-          status: { $in: ['pending', 'reviewing', 'approved'] }
-        })
-          .populate('basePackageId')
-          .sort({ createdAt: -1 })
-          .limit(1);
-
-        if (relatedRequest) {
-          // Send email with package details
-          await sendCustomPackageCreatedEmail(relatedRequest, populated);
+        if (organization && !organization.customPackages.includes(customPackage._id)) {
+          organization.customPackages.push(customPackage._id);
+          await organization.save();
+          console.log('✅ Added custom package to organization:', organization.name);
         }
-      } catch (emailError) {
-        console.error('Error sending custom package creation email:', emailError);
-        // Don't fail the request if email fails
+      } catch (orgError) {
+        console.error('❌ Error adding to organization:', orgError);
       }
 
-      res.status(201).json(populated);
+      // Add custom package to school's customPackages array
+      try {
+        if (school && !school.customPackages.includes(customPackage._id)) {
+          school.customPackages.push(customPackage._id);
+          await school.save();
+          console.log('✅ Added custom package to school:', school.name);
+        }
+      } catch (schoolError) {
+        console.error('❌ Error adding to school:', schoolError);
+      }
+
+      console.log('📦 Populating custom package data...');
+      let populated;
+      try {
+        populated = await CustomPackage.findById(customPackage._id)
+          .populate('basePackageId')
+          .populate('organizationId')
+          .populate('addedCardIds');
+        console.log('✅ Custom package populated successfully');
+        console.log('📦 Populated package ID:', populated?._id);
+      } catch (populateError) {
+        console.error('❌ Error populating custom package:', populateError);
+        console.error('❌ Populate error stack:', populateError.stack);
+        // Don't throw - continue with email sending even if populate fails
+        populated = customPackage; // Use unpopulated version as fallback
+      }
+
+      // Send email notification - SIMPLIFIED APPROACH
+      // Get email directly from customPackageRequestId
+      console.log('📧 ========== EMAIL SENDING PROCESS STARTED ==========');
+      console.log('📧 Custom package ID:', customPackage._id);
+      console.log('📧 Request body customPackageRequestId:', req.body.customPackageRequestId);
+      
+      let emailSent = false;
+      let emailRecipient = null;
+      let emailError = null;
+      
+      try {
+        // Step 1: Find the request using customPackageRequestId
+        if (req.body.customPackageRequestId) {
+          console.log('🔍 Finding custom package request:', req.body.customPackageRequestId);
+          
+          const relatedRequest = await CustomPackageRequest.findById(req.body.customPackageRequestId)
+            .populate('basePackageId');
+          
+          if (relatedRequest && relatedRequest.contactEmail) {
+            emailRecipient = relatedRequest.contactEmail;
+            console.log('✅ Found request with email:', emailRecipient);
+            console.log('📧 Contact Name:', relatedRequest.contactName);
+            console.log('📧 Organization:', relatedRequest.organizationName);
+            
+            // Step 2: Send email using the same pattern as other emails in the system
+            console.log('📧 Sending email to:', emailRecipient);
+            const emailResult = await sendCustomPackageCreatedEmail(relatedRequest, populated);
+            
+            if (emailResult.success) {
+              console.log('✅ Email sent successfully!');
+              console.log('✅ Message ID:', emailResult.messageId);
+              emailSent = true;
+            } else {
+              console.error('❌ Email sending failed:', emailResult.error || emailResult.message);
+              emailError = emailResult.error || emailResult.message || 'Email sending failed';
+            }
+          } else {
+            console.warn('⚠️ Request not found or no contactEmail');
+            emailError = relatedRequest ? 'No contactEmail in request' : 'Request not found';
+          }
+        } else {
+          console.warn('⚠️ No customPackageRequestId provided in request body');
+          emailError = 'No customPackageRequestId provided';
+        }
+      } catch (error) {
+        console.error('❌ Error in email sending process:', error);
+        console.error('❌ Error stack:', error.stack);
+        emailError = error.message || 'Unknown error';
+      }
+      
+      console.log('📧 Email sending completed:', {
+        emailSent,
+        emailRecipient,
+        emailError
+      });
+
+      // Return response with email status
+      const responseData = {
+        ...populated.toObject(),
+        emailSent: emailSent,
+        emailRecipient: emailRecipient,
+        emailError: emailError
+      };
+      
+      console.log('📧 Final email status in response:', {
+        emailSent: responseData.emailSent,
+        emailRecipient: responseData.emailRecipient,
+        emailError: responseData.emailError
+      });
+      
+      res.status(201).json(responseData);
     } catch (error) {
       console.error('Error creating custom package:', error);
       res.status(500).json({ error: 'Server error' });
@@ -139,7 +333,8 @@ router.put(
       )
         .populate('basePackageId')
         .populate('organizationId')
-        .populate('effectiveCardIds');
+        .populate('schoolId')
+        .populate('productIds', 'name description price visibility imageUrl');
 
       if (!customPackage) {
         return res.status(404).json({ error: 'Custom package not found' });

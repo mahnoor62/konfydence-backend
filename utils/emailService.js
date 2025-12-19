@@ -116,10 +116,6 @@ const createEmailTemplate = (request, status, adminNotes) => {
                     <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Organization:</strong></td>
                     <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${request.organizationName}</td>
                   </tr>
-                  <tr>
-                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Base Package:</strong></td>
-                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${request.basePackageId?.name || 'N/A'}</td>
-                  </tr>
                   ${request.requestedModifications?.seatLimit ? `
                   <tr>
                     <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Requested Seats:</strong></td>
@@ -221,7 +217,6 @@ Status: ${getStatusLabel(newStatus)}
 
 Request Details:
 - Organization: ${request.organizationName}
-- Base Package: ${request.basePackageId?.name || 'N/A'}
 ${request.requestedModifications?.seatLimit ? `- Requested Seats: ${request.requestedModifications.seatLimit}` : ''}
 
 ${adminNotes ? `\nAdditional Information:\n${adminNotes}\n` : ''}
@@ -317,10 +312,6 @@ const createCustomPackageEmailTemplate = (request, customPackage) => {
                     <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${request.organizationName}</td>
                   </tr>
                   <tr>
-                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Base Package:</strong></td>
-                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${request.basePackageId?.name || 'N/A'}</td>
-                  </tr>
-                  <tr>
                     <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Seat Limit:</strong></td>
                     <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${customPackage.seatLimit || request.requestedModifications?.seatLimit || 'N/A'}</td>
                   </tr>
@@ -350,7 +341,7 @@ const createCustomPackageEmailTemplate = (request, customPackage) => {
                   <tr>
                     <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Amount:</strong></td>
                     <td style="padding: 8px 0; color: ${colors.primary}; font-size: 18px; font-weight: 700;">
-                      ${customPackage.contractPricing?.currency || 'EUR'}${customPackage.contractPricing?.amount || 0}
+                      ${(customPackage.contractPricing?.currency || 'EUR') === 'EUR' ? '€' : (customPackage.contractPricing?.currency || 'EUR')}${customPackage.contractPricing?.amount || 0}
                     </td>
                   </tr>
                   <tr>
@@ -367,12 +358,12 @@ const createCustomPackageEmailTemplate = (request, customPackage) => {
                 </table>
               </div>
               
-              ${customPackage.effectiveCardIds && customPackage.effectiveCardIds.length > 0 ? `
-              <!-- Included Cards -->
+              ${customPackage.addedCardIds && customPackage.addedCardIds.length > 0 ? `
+              <!-- Added Cards -->
               <div style="background-color: ${colors.background}; padding: 20px; border-radius: 6px; margin: 20px 0;">
-                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">Included Cards (${customPackage.effectiveCardIds.length})</h3>
+                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">Additional Cards (${customPackage.addedCardIds.length})</h3>
                 <ul style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
-                  ${customPackage.effectiveCardIds.map(card => `
+                  ${customPackage.addedCardIds.map(card => `
                     <li>${card.title || card.name || 'Card'}</li>
                   `).join('')}
                 </ul>
@@ -383,9 +374,14 @@ const createCustomPackageEmailTemplate = (request, customPackage) => {
               <div style="margin: 30px 0;">
                 <p style="margin: 0 0 15px 0; color: ${colors.text}; font-size: 16px; font-weight: 600;">What's Next?</p>
                 <p style="margin: 0 0 10px 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
-                  Your custom package is now active and ready to use. You can access it through your organization dashboard.
+                  Your custom package is now active and ready to use. Please visit your organization dashboard to view and manage your package.
                 </p>
-                <p style="margin: 0 0 10px 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                <div style="background-color: ${colors.secondary}; padding: 15px; border-radius: 6px; margin: 15px 0; text-align: center;">
+                  <a href="${process.env.FRONTEND_URL || 'https://konfydence.com'}/dashboard/institute" style="display: inline-block; background-color: ${colors.white}; color: ${colors.secondary}; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">
+                    Visit Dashboard
+                  </a>
+                </div>
+                <p style="margin: 10px 0 0 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
                   Our team will be in touch shortly to help you get started and answer any questions you may have.
                 </p>
               </div>
@@ -427,9 +423,31 @@ const sendCustomPackageCreatedEmail = async (request, customPackage) => {
   try {
     // Check if email service is configured
     if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-      console.warn('Email service not configured. Skipping email send.');
+      console.warn('⚠️ Email service not configured. Skipping email send.');
+      console.warn('⚠️ SMTP_USER:', process.env.SMTP_USER ? 'Set' : 'Missing');
+      console.warn('⚠️ SMTP_PASS:', process.env.SMTP_PASS ? 'Set' : 'Missing');
       return { success: false, message: 'Email service not configured' };
     }
+
+    // Validate request has contact email
+    if (!request.contactEmail) {
+      console.error('❌ Request does not have contactEmail:', request);
+      return { success: false, message: 'Request contactEmail is missing' };
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(request.contactEmail)) {
+      console.error('❌ Invalid email format:', request.contactEmail);
+      return { success: false, message: 'Invalid email format' };
+    }
+
+    console.log('📧 Preparing to send custom package creation email:', {
+      to: request.contactEmail,
+      contactName: request.contactName,
+      organizationName: request.organizationName,
+      packageName: customPackage.name || 'Custom Package'
+    });
 
     const transporter = createTransporter();
     const emailHtml = createCustomPackageEmailTemplate(request, customPackage);
@@ -445,19 +463,20 @@ Dear ${request.contactName},
 Great news! Your custom package for ${request.organizationName} has been successfully created and is now active.
 
 Package Details:
-- Package Name: ${customPackage.name || request.basePackageId?.name || 'Custom Package'}
+- Package Name: ${customPackage.name || 'Custom Package'}
 - Organization: ${request.organizationName}
-- Base Package: ${request.basePackageId?.name || 'N/A'}
 - Seat Limit: ${customPackage.seatLimit || request.requestedModifications?.seatLimit || 'N/A'}
 - Contract Start Date: ${customPackage.contract?.startDate ? new Date(customPackage.contract.startDate).toLocaleDateString() : 'N/A'}
 - Contract End Date: ${customPackage.contract?.endDate ? new Date(customPackage.contract.endDate).toLocaleDateString() : 'N/A'}
 - Contract Status: ${customPackage.contract?.status || 'Active'}
 
 Pricing Information:
-- Amount: ${customPackage.contractPricing?.currency || 'EUR'}${customPackage.contractPricing?.amount || 0}
+- Amount: ${(customPackage.contractPricing?.currency || 'EUR') === 'EUR' ? '€' : (customPackage.contractPricing?.currency || 'EUR')}${customPackage.contractPricing?.amount || 0}
 - Billing Type: ${customPackage.contractPricing?.billingType || 'N/A'}
 
-Your custom package is now active and ready to use. You can access it through your organization dashboard.
+Your custom package is now active and ready to use. Please visit your organization dashboard to view and manage your package.
+
+Dashboard Link: ${process.env.FRONTEND_URL || 'https://konfydence.com'}/dashboard/institute
 
 Our team will be in touch shortly to help you get started.
 
@@ -468,11 +487,51 @@ The Konfydence Team
       `.trim(),
     };
 
+    console.log('📧 Sending email via SMTP:', {
+      from: process.env.SMTP_USER,
+      to: request.contactEmail,
+      host: process.env.SMTP_HOST || 'smtp.gmail.com'
+    });
+
     const info = await transporter.sendMail(mailOptions);
-    console.log('Custom package creation email sent successfully:', info.messageId);
-    return { success: true, messageId: info.messageId };
+    
+    console.log('✅ Custom package creation email sent successfully:', {
+      messageId: info.messageId,
+      to: request.contactEmail,
+      accepted: info.accepted,
+      rejected: info.rejected,
+      response: info.response
+    });
+
+    // Log warning if email was rejected
+    if (info.rejected && info.rejected.length > 0) {
+      console.warn('⚠️ Email was rejected by SMTP server:', {
+        rejected: info.rejected,
+        messageId: info.messageId,
+        to: request.contactEmail
+      });
+    }
+
+    // Log success note
+    if (info.accepted && info.accepted.length > 0) {
+      console.log('✅ Email accepted by SMTP server. Note: Email may take a few minutes to arrive. Please check spam folder if not received.');
+    }
+
+    return { 
+      success: true, 
+      messageId: info.messageId,
+      accepted: info.accepted,
+      rejected: info.rejected
+    };
   } catch (error) {
-    console.error('Error sending custom package creation email:', error);
+    console.error('❌ Error sending custom package creation email:', {
+      error: error.message,
+      stack: error.stack,
+      to: request?.contactEmail,
+      smtpUser: process.env.SMTP_USER ? 'Set' : 'Missing',
+      smtpPass: process.env.SMTP_PASS ? 'Set' : 'Missing',
+      smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com'
+    });
     return { success: false, error: error.message };
   }
 };
@@ -631,7 +690,7 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
                   <tr>
                     <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Amount Paid:</strong></td>
                     <td style="padding: 8px 0; color: ${colors.primary}; font-size: 16px; font-weight: 700;">
-                      ${transaction.currency || 'EUR'}${transaction.amount || 0}
+                      ${((transaction.currency || 'EUR') === 'EUR' ? '€' : (transaction.currency || 'EUR'))}${transaction.amount || 0}
                     </td>
                   </tr>
                   <tr>
@@ -791,8 +850,8 @@ Your Unique Code: ${transaction.uniqueCode}
 
 Package Details:
 - Package Name: ${package?.name || 'N/A'
-  
-}
+
+}image.png
 - Package Type: ${packageTypeLabel}
 - Transaction Type: ${getTransactionTypeLabel(transaction.type)}
 - Amount Paid: ${transaction.currency || 'EUR'}${transaction.amount || 0}
@@ -888,10 +947,118 @@ The Konfydence Team`;
   }
 };
 
+// Send membership termination email
+const sendMembershipTerminationEmail = async (member, organizationName, schoolName) => {
+  try {
+    const transporter = createTransporter();
+    
+    const orgOrSchoolName = organizationName || schoolName || 'Organization';
+    const isSchool = !!schoolName;
+
+    const htmlContent = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Membership Terminated</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #F5F8FB;">
+  <table role="presentation" style="width: 100%; border-collapse: collapse;">
+    <tr>
+      <td style="padding: 40px 20px; text-align: center;">
+        <table role="presentation" style="max-width: 600px; margin: 0 auto; background-color: #FFFFFF; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border-collapse: collapse;">
+          <tr>
+            <td style="background: linear-gradient(135deg, #063C5E 0%, #0B7897 100%); padding: 40px 30px; text-align: center; border-radius: 8px 8px 0 0;">
+              <h1 style="margin: 0; color: #FFFFFF; font-size: 28px; font-weight: 700;">Membership Terminated</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 40px 30px;">
+              <h2 style="margin: 0 0 20px 0; color: #063C5E; font-size: 24px; font-weight: 700;">Dear ${member.name || 'Member'},</h2>
+              <p style="margin: 0 0 20px 0; color: #333333; font-size: 16px; line-height: 1.6;">
+                We are writing to inform you that your membership with <strong>${orgOrSchoolName}</strong> has been terminated.
+              </p>
+              <div style="background-color: #FFF3CD; border-left: 4px solid #FFC107; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                <p style="margin: 0; color: #856404; font-size: 15px; font-weight: 600; line-height: 1.6;">
+                  ⚠️ Important: Your access to the ${isSchool ? 'school' : 'organization'} platform has been revoked.
+                </p>
+              </div>
+              <div style="background-color: #F5F8FB; padding: 20px; border-radius: 6px; margin: 20px 0; border-left: 4px solid #0B7897;">
+                <h3 style="margin: 0 0 10px 0; color: #063C5E; font-size: 18px; font-weight: 600;">Membership Details</h3>
+                <p style="margin: 0 0 10px 0; color: #333333; font-size: 16px; line-height: 1.6;">
+                  <strong>${isSchool ? 'School' : 'Organization'}:</strong> ${orgOrSchoolName}
+                </p>
+                <p style="margin: 0 0 10px 0; color: #333333; font-size: 16px; line-height: 1.6;">
+                  <strong>Termination Date:</strong> ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+                </p>
+              </div>
+              <p style="margin: 20px 0 0 0; color: #666666; font-size: 14px; line-height: 1.6;">
+                If you have any questions or believe this is an error, please contact the ${isSchool ? 'school' : 'organization'} administrator.
+              </p>
+              <div style="border-top: 2px solid #F5F8FB; padding-top: 20px; margin-top: 30px;">
+                <p style="margin: 0; color: #0B7897; font-size: 14px; font-weight: 600;">
+                  Best regards,<br>
+                  The Konfydence Team
+                </p>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color: #063C5E; padding: 20px 30px; text-align: center; border-radius: 0 0 8px 8px;">
+              <p style="margin: 0; color: #FFFFFF; font-size: 12px;">
+                © 2025 Konfydence. All rights reserved.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `;
+
+    const mailOptions = {
+      from: `"Konfydence" <${process.env.SMTP_USER}>`,
+      to: member.email,
+      subject: `Membership Terminated - ${orgOrSchoolName}`,
+      html: htmlContent,
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+
+    console.log('Membership termination email sent successfully:', {
+      messageId: info.messageId,
+      to: member.email,
+      accepted: info.accepted,
+      rejected: info.rejected
+    });
+
+    return { 
+      success: true, 
+      messageId: info.messageId,
+      accepted: info.accepted,
+      rejected: info.rejected
+    };
+  } catch (error) {
+    console.error('Error sending membership termination email:', {
+      error: error.message,
+      stack: error.stack,
+      to: member?.email,
+      smtpUser: process.env.SMTP_USER ? 'Set' : 'Missing',
+      smtpPass: process.env.SMTP_PASS ? 'Set' : 'Missing',
+      smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com'
+    });
+    return { success: false, error: error.message };
+  }
+};
+
 module.exports = {
   sendStatusUpdateEmail,
   sendCustomPackageCreatedEmail,
   sendTransactionSuccessEmail,
+  sendMembershipTerminationEmail,
   createTransporter,
 };
 

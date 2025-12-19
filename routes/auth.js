@@ -7,6 +7,7 @@ const { authenticateToken } = require('../middleware/auth');
 const Admin = require('../models/Admin');
 const User = require('../models/User');
 const Organization = require('../models/Organization');
+const School = require('../models/School');
 const { createTransporter } = require('../utils/emailService');
 
 // Password strength validator
@@ -294,7 +295,15 @@ router.post(
         });
       }
 
-      const { email, password, name, userType, organizationName, organizationType } = req.body;
+      const { email, password, name, userType, organizationName, organizationType, customOrganizationType } = req.body;
+
+      // Log registration attempt for debugging
+      console.log('Registration attempt:', {
+        email,
+        userType,
+        hasOrganizationName: !!organizationName,
+        hasOrganizationType: !!organizationType
+      });
 
       const existing = await User.findOne({ email });
       if (existing) {
@@ -304,7 +313,7 @@ router.post(
         });
       }
 
-      // Determine user role based on userType
+      // Determine user role based on userType - CRITICAL: Ensure role matches userType
       let userRole = 'b2c_user';
       if (userType === 'b2b') {
         userRole = 'b2b_user';
@@ -312,10 +321,26 @@ router.post(
         userRole = 'b2e_user';
       }
 
+      // Validate: If organization/school data is provided, userType must be b2b or b2e
+      if ((organizationName || organizationType) && userType !== 'b2b' && userType !== 'b2e') {
+        console.warn('Warning: Organization data provided but userType is not b2b/b2e:', { userType, organizationName });
+        return res.status(400).json({ 
+          error: 'Invalid registration type. Organization data requires B2B or B2E registration.',
+          errorCode: 'INVALID_USER_TYPE'
+        });
+      }
+
       // Validate organization fields for B2B/B2E
       if ((userType === 'b2b' || userType === 'b2e') && (!organizationName || !organizationType)) {
         return res.status(400).json({ 
           error: 'Organization name and type are required for B2B/B2E registration'
+        });
+      }
+
+      // Validate custom organization type when "other" is selected
+      if ((userType === 'b2b' || userType === 'b2e') && organizationType === 'other' && !customOrganizationType) {
+        return res.status(400).json({ 
+          error: 'Please specify your organization type'
         });
       }
 
@@ -326,36 +351,172 @@ router.post(
       const emailVerificationExpiry = new Date();
       emailVerificationExpiry.setHours(emailVerificationExpiry.getHours() + 24); // 24 hours expiry
 
-      // Create user
+      // Create user FIRST - this ensures we have user._id for ownerId
       const user = await User.create({
         email,
         passwordHash,
         name: name || email.split('@')[0],
-        role: userRole,
+        role: userRole, // CRITICAL: Ensure role is set correctly based on userType
         isActive: true,
         isEmailVerified: false,
         emailVerificationToken,
         emailVerificationExpiry
       });
 
-      // Create organization for B2B/B2E users
-      let organization = null;
-      if (userType === 'b2b' || userType === 'b2e') {
-        const segment = userType === 'b2b' ? 'B2B' : 'B2E';
-        organization = await Organization.create({
-          name: organizationName,
-          type: organizationType,
-          segment: segment,
-          primaryContact: {
-            name: name || email.split('@')[0],
-            email: email
-          },
-          status: 'prospect' // New organization starts as prospect
+      // Verify user was created successfully and has _id
+      if (!user || !user._id) {
+        return res.status(500).json({ 
+          error: 'Failed to create user account. Please try again.',
+          errorCode: 'USER_CREATION_FAILED'
         });
+      }
+
+      // Log user creation for debugging
+      console.log('User created:', {
+        userId: user._id.toString(),
+        email: user.email,
+        role: user.role,
+        expectedRole: userRole,
+        userType: userType,
+        roleMatches: user.role === userRole
+      });
+
+      // Create organization or school for B2B/B2E users with CORRECT ownerId
+      let organization = null;
+      let school = null;
+      try {
+        if (userType === 'b2b') {
+          // Generate unique code before creating
+          let uniqueCode;
+          let isUnique = false;
+          while (!isUnique) {
+            uniqueCode = 'ORG-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+            const existing = await Organization.findOne({ uniqueCode });
+            if (!existing) {
+              isUnique = true;
+            }
+          }
+
+          const organizationData = {
+            name: organizationName.trim(),
+            type: organizationType,
+            segment: 'B2B', // B2B users create B2B organizations
+            uniqueCode: uniqueCode,
+            primaryContact: {
+              name: name || email.split('@')[0],
+              email: email
+            },
+            status: 'prospect',
+            ownerId: user._id // CRITICAL: Use the actual user._id that was just created
+          };
+          
+          // Add custom type if "other" is selected
+          if (organizationType === 'other' && customOrganizationType) {
+            organizationData.customType = customOrganizationType.trim();
+          }
+          
+          organization = await Organization.create(organizationData);
+          
+          // Log organization creation for debugging
+          console.log('Organization created:', {
+            organizationId: organization._id.toString(),
+            ownerId: organization.ownerId.toString(),
+            userId: user._id.toString(),
+            ownerIdMatches: organization.ownerId.toString() === user._id.toString()
+          });
+          
+          // Verify organization was created with correct ownerId
+          if (organization.ownerId.toString() !== user._id.toString()) {
+            // Cleanup and return error
+            await User.findByIdAndDelete(user._id);
+            await Organization.findByIdAndDelete(organization._id);
+            console.error('ERROR: Organization ownerId does not match user._id:', {
+              organizationOwnerId: organization.ownerId.toString(),
+              userId: user._id.toString()
+            });
+            return res.status(500).json({ 
+              error: 'Failed to link organization to user. Please try again.',
+              errorCode: 'ORGANIZATION_LINK_FAILED'
+            });
+          }
+          
+          // Link organization to user
+          user.organizationId = organization._id;
+          await user.save();
+        } else if (userType === 'b2e') {
+          // Generate unique code before creating
+          let uniqueCode;
+          let isUnique = false;
+          while (!isUnique) {
+            uniqueCode = 'SCH-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+            const existing = await School.findOne({ uniqueCode });
+            if (!existing) {
+              isUnique = true;
+            }
+          }
+
+          const schoolData = {
+            name: organizationName.trim(),
+            type: organizationType,
+            uniqueCode: uniqueCode,
+            primaryContact: {
+              name: name || email.split('@')[0],
+              email: email
+            },
+            status: 'prospect',
+            ownerId: user._id // CRITICAL: Use the actual user._id that was just created
+          };
+          
+          // Add custom type if "other" is selected
+          if (organizationType === 'other' && customOrganizationType) {
+            schoolData.customType = customOrganizationType.trim();
+          }
+          
+          school = await School.create(schoolData);
+          
+          // Log school creation for debugging
+          console.log('School created:', {
+            schoolId: school._id.toString(),
+            ownerId: school.ownerId.toString(),
+            userId: user._id.toString(),
+            ownerIdMatches: school.ownerId.toString() === user._id.toString()
+          });
+          
+          // Verify school was created with correct ownerId
+          if (school.ownerId.toString() !== user._id.toString()) {
+            // Cleanup and return error
+            await User.findByIdAndDelete(user._id);
+            await School.findByIdAndDelete(school._id);
+            console.error('ERROR: School ownerId does not match user._id:', {
+              schoolOwnerId: school.ownerId.toString(),
+              userId: user._id.toString()
+            });
+            return res.status(500).json({ 
+              error: 'Failed to link school to user. Please try again.',
+              errorCode: 'SCHOOL_LINK_FAILED'
+            });
+          }
+          
+          // Link school to user
+          user.schoolId = school._id;
+          await user.save();
+        }
+      } catch (orgError) {
+        // If organization/school creation fails, delete the user
+        await User.findByIdAndDelete(user._id);
         
-        // Link organization to user
-        user.organizationId = organization._id;
-        await user.save();
+        if (orgError.code === 11000) {
+          return res.status(400).json({ 
+            error: 'An organization or school with this name already exists. Please use a different name.',
+            errorCode: 'DUPLICATE_ORGANIZATION'
+          });
+        }
+        
+        console.error('Error creating organization/school:', orgError);
+        return res.status(500).json({ 
+          error: 'Failed to create organization/school. Please try again later.',
+          errorCode: 'ORGANIZATION_CREATION_FAILED'
+        });
       }
 
       // Send verification email
@@ -369,6 +530,47 @@ router.post(
           emailError = 'Email service not configured';
         } else {
           const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email?token=${emailVerificationToken}`;
+          
+          // Include unique code in email if organization or school is created
+          let uniqueCodeSection = '';
+          if (organization) {
+            uniqueCodeSection = `
+              <div style="background-color: #F5F8FB; padding: 20px; border-radius: 6px; margin: 20px 0; border-left: 4px solid #0B7897;">
+                <h3 style="margin: 0 0 10px 0; color: #063C5E; font-size: 18px; font-weight: 600;">Your Organization Registration Code</h3>
+                <p style="margin: 0 0 10px 0; color: #333333; font-size: 16px; line-height: 1.6;">
+                  Your organization has been successfully registered! This is your organization registration code:
+                </p>
+                <div style="background-color: #FFFFFF; padding: 15px; border-radius: 4px; text-align: center; margin: 15px 0;">
+                  <p style="margin: 0; color: #0B7897; font-size: 24px; font-weight: 700; letter-spacing: 2px;">${organization.uniqueCode}</p>
+                </div>
+                <p style="margin: 10px 0 0 0; color: #333333; font-size: 15px; line-height: 1.6; font-weight: 600;">
+                  Share this code with your organization members:
+                </p>
+                <p style="margin: 10px 0 0 0; color: #666666; font-size: 14px; line-height: 1.6;">
+                  Your organization members can use this code to register and become members of your organization. They will need your approval before they can access the platform. This code is specifically for your organization registration and member management.
+                </p>
+              </div>
+            `;
+          } else if (school) {
+            uniqueCodeSection = `
+              <div style="background-color: #F5F8FB; padding: 20px; border-radius: 6px; margin: 20px 0; border-left: 4px solid #0B7897;">
+                <h3 style="margin: 0 0 10px 0; color: #063C5E; font-size: 18px; font-weight: 600;">Your School Registration Code</h3>
+                <p style="margin: 0 0 10px 0; color: #333333; font-size: 16px; line-height: 1.6;">
+                  Your school has been successfully registered! This is your school registration code:
+                </p>
+                <div style="background-color: #FFFFFF; padding: 15px; border-radius: 4px; text-align: center; margin: 15px 0;">
+                  <p style="margin: 0; color: #0B7897; font-size: 24px; font-weight: 700; letter-spacing: 2px;">${school.uniqueCode}</p>
+                </div>
+                <p style="margin: 10px 0 0 0; color: #333333; font-size: 15px; line-height: 1.6; font-weight: 600;">
+                  Share this code with your school members:
+                </p>
+                <p style="margin: 10px 0 0 0; color: #666666; font-size: 14px; line-height: 1.6;">
+                  Your school members can use this code to register and become members of your school. They will need your approval before they can access the platform. This code is specifically for your school registration and member management.
+                </p>
+              </div>
+            `;
+          }
+          
           const emailHtml = `
 <!DOCTYPE html>
 <html>
@@ -397,6 +599,11 @@ router.post(
               <p style="margin: 0 0 20px 0; color: #333333; font-size: 16px; line-height: 1.6;">
                 Thank you for registering with Konfydence! Please verify your email address by clicking the button below:
               </p>
+              <div style="background-color: #FFF3CD; border-left: 4px solid #FFC107; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                <p style="margin: 0; color: #856404; font-size: 15px; font-weight: 600; line-height: 1.6;">
+                  ⚠️ Important: You must verify your email address before you can login to your account.
+                </p>
+              </div>
               <table role="presentation" style="width: 100%; margin: 30px 0; border-collapse: collapse;">
                 <tr>
                   <td align="center">
@@ -404,6 +611,7 @@ router.post(
                   </td>
                 </tr>
               </table>
+              ${uniqueCodeSection}
               <p style="margin: 20px 0 0 0; color: #666666; font-size: 14px; line-height: 1.6;">
                 Or copy and paste this link into your browser:<br>
                 <a href="${verificationUrl}" style="color: #0B7897; word-break: break-all;">${verificationUrl}</a>
@@ -440,7 +648,7 @@ router.post(
             to: email,
             subject: 'Verify Your Email Address - Konfydence',
             html: emailHtml,
-            text: `Dear ${name || 'User'},\n\nThank you for registering with Konfydence! Please verify your email address by clicking this link: ${verificationUrl}\n\nThis link will expire in 24 hours.\n\nBest regards,\nThe Konfydence Team`
+            text: `Dear ${name || 'User'},\n\nThank you for registering with Konfydence!\n\nIMPORTANT: You must verify your email address before you can login to your account.\n\nPlease verify your email address by clicking this link: ${verificationUrl}\n\n${organization ? `\nYour Organization Registration Code: ${organization.uniqueCode}\n\nThis code is for your organization registration. Share this code with your organization members so they can register and become members of your organization. They will need your approval before they can access the platform.\n` : ''}${school ? `\nYour School Registration Code: ${school.uniqueCode}\n\nThis code is for your school registration. Share this code with your school members so they can register and become members of your school. They will need your approval before they can access the platform.\n` : ''}\nThis link will expire in 24 hours. If you didn't create an account, please ignore this email.\n\nBest regards,\nThe Konfydence Team`
           });
           
           emailSent = true;
@@ -481,7 +689,13 @@ router.post(
           id: organization._id,
           name: organization.name,
           type: organization.type,
-          segment: organization.segment
+          uniqueCode: organization.uniqueCode
+        } : null,
+        school: school ? {
+          id: school._id,
+          name: school.name,
+          type: school.type,
+          uniqueCode: school.uniqueCode
         } : null
       };
 
@@ -498,13 +712,42 @@ router.post(
       res.status(201).json(response);
     } catch (error) {
       console.error('Register error:', error);
+      
+      // If user was created but something else failed, try to clean up
+      if (error.userId) {
+        try {
+          await User.findByIdAndDelete(error.userId);
+        } catch (cleanupError) {
+          console.error('Error during cleanup:', cleanupError);
+        }
+      }
+      
       if (error.code === 11000) {
+        if (error.keyPattern && error.keyPattern.email) {
+          return res.status(400).json({ 
+            error: 'This email is already registered. Please login instead or use a different email.',
+            errorCode: 'EMAIL_ALREADY_EXISTS'
+          });
+        }
         return res.status(400).json({ 
-          error: 'This email is already registered. Please login instead or use a different email.',
-          errorCode: 'EMAIL_ALREADY_EXISTS'
+          error: 'A record with this information already exists. Please check your details and try again.',
+          errorCode: 'DUPLICATE_ENTRY'
         });
       }
-      res.status(500).json({ error: 'Server error. Please try again later.' });
+      
+      // Provide user-friendly error messages
+      if (error.name === 'ValidationError') {
+        const firstError = Object.values(error.errors)[0];
+        return res.status(400).json({ 
+          error: firstError?.message || 'Invalid input. Please check your details and try again.',
+          errorCode: 'VALIDATION_ERROR'
+        });
+      }
+      
+      res.status(500).json({ 
+        error: 'Registration failed. Please try again later. If the problem persists, please contact support.',
+        errorCode: 'SERVER_ERROR'
+      });
     }
   }
 );
@@ -576,7 +819,10 @@ router.post(
           id: user._id,
           email: user.email,
           name: user.name,
-          role: user.role
+          role: user.role,
+          organizationId: user.organizationId || null,
+          schoolId: user.schoolId || null,
+          memberStatus: user.memberStatus || null
         }
       });
     } catch (error) {
@@ -912,6 +1158,451 @@ router.post('/user/reset-password', [
     res.json({ message: 'Password reset successfully! You can now login with your new password.' });
   } catch (error) {
     console.error('Error resetting password:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Member Registration (Organization/School Member)
+router.post(
+  '/member/register',
+  [
+    body('email')
+      .isEmail()
+      .withMessage('Please enter a valid email address')
+      .normalizeEmail(),
+    body('password')
+      .custom((value) => {
+        return validateStrongPassword(value);
+      }),
+    body('name')
+      .trim()
+      .isLength({ min: 2 })
+      .withMessage('Name must be at least 2 characters long'),
+    body('organizationCode')
+      .notEmpty()
+      .withMessage('Organization or School code is required')
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        const firstError = errors.array()[0];
+        return res.status(400).json({ 
+          error: firstError.msg || 'Invalid input. Please check your details.'
+        });
+      }
+
+      const { email, password, name, organizationCode } = req.body;
+
+      const existing = await User.findOne({ email });
+      if (existing) {
+        return res.status(400).json({ 
+          error: 'This email is already registered. Please login instead or use a different email.',
+          errorCode: 'EMAIL_ALREADY_EXISTS'
+        });
+      }
+
+      // Find organization or school by code
+      const organization = await Organization.findOne({ uniqueCode: organizationCode.toUpperCase() });
+      const school = await School.findOne({ uniqueCode: organizationCode.toUpperCase() });
+
+      if (!organization && !school) {
+        return res.status(400).json({ 
+          error: 'Invalid organization or school code. Please check your code and try again.'
+        });
+      }
+
+      const passwordHash = await bcrypt.hash(password, 10);
+      
+      // Create user as member
+      const user = await User.create({
+        email,
+        passwordHash,
+        name: name || email.split('@')[0],
+        role: organization ? 'b2b_member' : 'b2e_member',
+        isActive: true,
+        isEmailVerified: false, // No email verification for members initially
+        organizationId: organization ? organization._id : null,
+        schoolId: school ? school._id : null,
+        memberStatus: 'pending' // Pending approval
+      });
+
+      // Create member request
+      const MemberRequest = require('../models/MemberRequest');
+      await MemberRequest.create({
+        user: user._id,
+        organizationId: organization ? organization._id : null,
+        schoolId: school ? school._id : null,
+        organizationCode: organizationCode.toUpperCase(),
+        status: 'pending'
+      });
+
+      res.status(201).json({
+        message: 'Registration successful! Your request has been sent to the organization/school admin for approval. You will receive an email once approved.',
+        requiresApproval: true,
+        user: {
+          id: user._id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          memberStatus: 'pending'
+        },
+        organization: organization ? {
+          name: organization.name
+        } : null,
+        school: school ? {
+          name: school.name
+        } : null
+      });
+    } catch (error) {
+      console.error('Member registration error:', error);
+      if (error.code === 11000) {
+        return res.status(400).json({ 
+          error: 'This email is already registered. Please login instead or use a different email.',
+          errorCode: 'EMAIL_ALREADY_EXISTS'
+        });
+      }
+      res.status(500).json({ error: 'Server error. Please try again later.' });
+    }
+  }
+);
+
+// Member Login (with code)
+router.post(
+  '/member/login',
+  [
+    body('code')
+      .notEmpty()
+      .withMessage('Organization or School code is required'),
+    body('email')
+      .isEmail()
+      .normalizeEmail(),
+    body('password')
+      .notEmpty()
+      .withMessage('Password is required')
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        const firstError = errors.array()[0];
+        return res.status(400).json({ 
+          error: firstError.msg || 'Invalid input.'
+        });
+      }
+
+      const { email, password, code } = req.body;
+
+      // Find organization or school by code
+      const organization = await Organization.findOne({ uniqueCode: code.toUpperCase() });
+      const school = await School.findOne({ uniqueCode: code.toUpperCase() });
+
+      if (!organization && !school) {
+        return res.status(400).json({ 
+          error: 'Invalid organization or school code. Please check your code and try again.'
+        });
+      }
+
+      // Find user
+      const user = await User.findOne({ email });
+      if (!user) {
+        return res.status(401).json({ 
+          error: 'User not found. Please register yourself first.',
+          errorCode: 'USER_NOT_FOUND'
+        });
+      }
+
+      // Verify user belongs to this organization/school
+      if (organization) {
+        if (!user.organizationId || user.organizationId.toString() !== organization._id.toString()) {
+          return res.status(403).json({ 
+            error: `You are not a member of this organization (${organization.name}). Please register as a member of this organization.`,
+            errorCode: 'NOT_MEMBER',
+            organizationName: organization.name
+          });
+        }
+      }
+
+      if (school) {
+        if (!user.schoolId || user.schoolId.toString() !== school._id.toString()) {
+          return res.status(403).json({ 
+            error: `You are not a member of this school (${school.name}). Please register as a member of this school.`,
+            errorCode: 'NOT_MEMBER',
+            schoolName: school.name
+          });
+        }
+      }
+
+      // Check if member is approved
+      if (user.memberStatus !== 'approved') {
+        return res.status(403).json({ 
+          error: 'Your membership request is pending approval. Please wait for admin approval.',
+          errorCode: 'PENDING_APPROVAL',
+          memberStatus: user.memberStatus
+        });
+      }
+
+      if (!user.isActive) {
+        return res.status(403).json({ 
+          error: 'Account is deactivated. Please contact support to reactivate your account.',
+          errorCode: 'ACCOUNT_DEACTIVATED'
+        });
+      }
+
+      const isValid = await bcrypt.compare(password, user.passwordHash);
+      if (!isValid) {
+        return res.status(401).json({ 
+          error: 'Invalid password. Please check your password and try again.',
+          errorCode: 'INVALID_PASSWORD'
+        });
+      }
+
+      user.lastLogin = new Date();
+      await user.save();
+
+      const token = jwt.sign(
+        { userId: user._id, email: user.email, role: user.role },
+        process.env.JWT_SECRET || 'fallback-secret',
+        { expiresIn: '30d' }
+      );
+
+      res.json({
+        token,
+        user: {
+          id: user._id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          organizationName: organization ? organization.name : (school ? school.name : null)
+        }
+      });
+    } catch (error) {
+      console.error('Member login error:', error);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+// Get member requests for organization/school admin
+router.get('/member/requests', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check if user is organization or school owner
+    let organization = null;
+    let school = null;
+
+    if (user.organizationId) {
+      organization = await Organization.findOne({ _id: user.organizationId, ownerId: user._id });
+    }
+
+    if (user.schoolId) {
+      school = await School.findOne({ _id: user.schoolId, ownerId: user._id });
+    }
+
+    if (!organization && !school) {
+      return res.status(403).json({ error: 'You are not authorized to view member requests.' });
+    }
+
+    const MemberRequest = require('../models/MemberRequest');
+    const requests = await MemberRequest.find({
+      $or: [
+        { organizationId: organization ? organization._id : null },
+        { schoolId: school ? school._id : null }
+      ],
+      status: 'pending'
+    })
+    .populate('user', 'name email createdAt')
+    .sort({ createdAt: -1 });
+
+    res.json({
+      requests,
+      organization: organization ? { name: organization.name, uniqueCode: organization.uniqueCode } : null,
+      school: school ? { name: school.name, uniqueCode: school.uniqueCode } : null
+    });
+  } catch (error) {
+    console.error('Error fetching member requests:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Approve/Reject member request
+router.post('/member/requests/:requestId/:action', authenticateToken, async (req, res) => {
+  try {
+    const { requestId, action } = req.params;
+    const { rejectionReason } = req.body;
+
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ error: 'Invalid action. Use approve or reject.' });
+    }
+
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const MemberRequest = require('../models/MemberRequest');
+    const request = await MemberRequest.findById(requestId)
+      .populate('user')
+      .populate('organizationId')
+      .populate('schoolId');
+
+    if (!request) {
+      return res.status(404).json({ error: 'Member request not found' });
+    }
+
+    // Verify user is the owner
+    let organization = null;
+    let school = null;
+
+    if (request.organizationId) {
+      organization = await Organization.findOne({ 
+        _id: request.organizationId._id, 
+        ownerId: user._id 
+      });
+    }
+
+    if (request.schoolId) {
+      school = await School.findOne({ 
+        _id: request.schoolId._id, 
+        ownerId: user._id 
+      });
+    }
+
+    if (!organization && !school) {
+      return res.status(403).json({ error: 'You are not authorized to perform this action.' });
+    }
+
+    if (action === 'approve') {
+      request.status = 'approved';
+      request.approvedBy = user._id;
+      request.approvedAt = new Date();
+      await request.save();
+
+      // Update user
+      const memberUser = await User.findById(request.user._id);
+      memberUser.memberStatus = 'approved';
+      memberUser.memberApprovedAt = new Date();
+      memberUser.memberApprovedBy = user._id;
+      memberUser.isEmailVerified = true; // Auto-verify approved members
+      await memberUser.save();
+
+      // Add member to organization/school members/students array for easy lookup
+      if (organization) {
+        await Organization.findByIdAndUpdate(organization._id, {
+          $addToSet: { members: memberUser._id }
+        });
+      }
+      if (school) {
+        // Schools use 'students' array (similar to organizations using 'members')
+        await School.findByIdAndUpdate(school._id, {
+          $addToSet: { students: memberUser._id }
+        });
+      }
+
+      // Send approval email with login code
+      try {
+        if (process.env.SMTP_USER && process.env.SMTP_PASS) {
+          const loginCode = organization ? organization.uniqueCode : school.uniqueCode;
+          const orgName = organization ? organization.name : school.name;
+          const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/member-login`;
+          
+          const emailHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Membership Approved</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #F5F8FB;">
+  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #F5F8FB; padding: 20px;">
+    <tr>
+      <td align="center" style="padding: 20px 0;">
+        <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: #FFFFFF; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <tr>
+            <td style="background: linear-gradient(135deg, #063C5E 0%, #0B7897 100%); padding: 30px; text-align: center;">
+              <h1 style="margin: 0; color: #FFFFFF; font-size: 28px; font-weight: 700;">Konfydence</h1>
+              <p style="margin: 5px 0 0 0; color: #FFD700; font-size: 14px; font-weight: 500;">Safer Digital Decisions</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 40px 30px;">
+              <h2 style="margin: 0 0 20px 0; color: #063C5E; font-size: 24px; font-weight: 700;">Membership Approved</h2>
+              <p style="margin: 0 0 20px 0; color: #333333; font-size: 16px; line-height: 1.6;">
+                Dear ${memberUser.name || 'Member'},
+              </p>
+              <p style="margin: 0 0 20px 0; color: #333333; font-size: 16px; line-height: 1.6;">
+                Congratulations! Your membership request for <strong>${orgName}</strong> has been approved.
+              </p>
+              <div style="background-color: #F5F8FB; padding: 20px; border-radius: 6px; margin: 20px 0; border-left: 4px solid #4caf50;">
+                <p style="margin: 0 0 10px 0; color: #333333; font-size: 16px; line-height: 1.6;">
+                  You can now login to your account using your email and password.
+                </p>
+                <p style="margin: 10px 0 0 0; color: #666666; font-size: 14px; line-height: 1.6;">
+                  Visit <a href="${verificationUrl}" style="color: #0B7897;">${verificationUrl}</a> to access your dashboard.
+                </p>
+              </div>
+              <table role="presentation" style="width: 100%; margin: 30px 0; border-collapse: collapse;">
+                <tr>
+                  <td align="center">
+                    <a href="${verificationUrl}" style="display: inline-block; background-color: #0B7897; color: #FFFFFF; text-decoration: none; padding: 14px 30px; border-radius: 6px; font-weight: 600; font-size: 16px;">Login Now</a>
+                  </td>
+                </tr>
+              </table>
+              <div style="border-top: 2px solid #F5F8FB; padding-top: 20px; margin-top: 30px;">
+                <p style="margin: 0; color: #0B7897; font-size: 14px; font-weight: 600;">
+                  Best regards,<br>
+                  The Konfydence Team
+                </p>
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+          `;
+
+          const transporter = createTransporter();
+          await transporter.sendMail({
+            from: `"Konfydence" <${process.env.SMTP_USER}>`,
+            to: memberUser.email,
+            subject: `Membership Approved - ${orgName}`,
+            html: emailHtml
+          });
+        }
+      } catch (emailError) {
+        console.error('Error sending approval email:', emailError);
+      }
+
+      res.json({
+        message: 'Member request approved successfully. Approval email has been sent.',
+        request: request
+      });
+    } else {
+      request.status = 'rejected';
+      request.rejectedAt = new Date();
+      request.rejectionReason = rejectionReason || 'Request rejected by admin';
+      await request.save();
+
+      // Update user
+      const memberUser = await User.findById(request.user._id);
+      memberUser.memberStatus = 'rejected';
+      await memberUser.save();
+
+      res.json({
+        message: 'Member request rejected successfully.',
+        request: request
+      });
+    }
+  } catch (error) {
+    console.error('Error processing member request:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });

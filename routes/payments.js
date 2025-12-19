@@ -3,6 +3,7 @@ const { authenticateToken } = require('../middleware/auth');
 const Package = require('../models/Package');
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
+const FreeTrial = require('../models/FreeTrial');
 const { sendTransactionSuccessEmail } = require('../utils/emailService');
 
 const router = express.Router();
@@ -49,6 +50,26 @@ const convertProductTargetAudienceToPackage = (targetAudience) => {
   };
   
   return mapping[targetAudience] || null;
+};
+
+// Calculate expiry date from package expiryTime and expiryTimeUnit
+// Returns null if no expiry time is set
+// Expiry date is calculated from purchase date + expiry time
+const calculateExpiryDate = (package, startDate = new Date()) => {
+  if (!package) return null;
+  
+  // Calculate expiry date from expiryTime and expiryTimeUnit
+  if (package.expiryTime && package.expiryTimeUnit) {
+    const expiryDate = new Date(startDate);
+    if (package.expiryTimeUnit === 'months') {
+      expiryDate.setMonth(expiryDate.getMonth() + package.expiryTime);
+    } else if (package.expiryTimeUnit === 'years') {
+      expiryDate.setFullYear(expiryDate.getFullYear() + package.expiryTime);
+    }
+    return expiryDate;
+  }
+  
+  return null;
 };
 
 // Determine transaction type based on package targetAudiences or product targetAudience
@@ -216,19 +237,10 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       return res.status(500).json({ error: 'Stripe is not configured. Please set STRIPE_SECRET_KEY in environment variables.' });
     }
 
-    const { packageId, productId } = req.body;
+    const { packageId, productId, customPackageId } = req.body;
     
-    if (!packageId) {
-      return res.status(400).json({ error: 'Package ID is required' });
-    }
-
-    const package = await Package.findById(packageId);
-    if (!package) {
-      return res.status(404).json({ error: 'Package not found' });
-    }
-
-    if (package.status !== 'active' || package.visibility !== 'public') {
-      return res.status(400).json({ error: 'Package is not available for purchase' });
+    if (!packageId && !customPackageId) {
+      return res.status(400).json({ error: 'Package ID or Custom Package ID is required' });
     }
 
     const user = await User.findById(req.userId);
@@ -236,24 +248,86 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Check if user already has this package
-    const existingMembership = user.memberships.find(
-      (m) => m.packageId.toString() === package._id.toString() && m.status === 'active'
-    );
+    let package = null;
+    let customPackage = null;
+    let pricing = null;
+    let packageName = '';
+    let packageDescription = '';
+    let billingType = 'one_time';
+    let currency = 'EUR';
+    let seatLimit = 5;
 
-    if (existingMembership) {
-      return res.status(400).json({ error: 'You already have an active membership for this package' });
-    }
+    // Handle custom package purchase
+    if (customPackageId) {
+      const CustomPackage = require('../models/CustomPackage');
+      customPackage = await CustomPackage.findById(customPackageId)
+        .populate('basePackageId')
+        .populate('organizationId')
+        .populate('schoolId');
+      
+      if (!customPackage) {
+        return res.status(404).json({ error: 'Custom package not found' });
+      }
 
-    // Check if there's already a successful transaction for this user and package
-    const existingTransaction = await Transaction.findOne({
-      userId: req.userId,
-      packageId: package._id,
-      status: 'paid',
-    });
+      // Check if custom package is already purchased by this organization/school
+      const existingTransaction = await Transaction.findOne({
+        $or: [
+          { organizationId: customPackage.organizationId, customPackageId: customPackage._id, status: 'paid' },
+          { schoolId: customPackage.schoolId, customPackageId: customPackage._id, status: 'paid' }
+        ]
+      });
 
-    if (existingTransaction) {
-      return res.status(400).json({ error: 'You have already purchased this package' });
+      if (existingTransaction) {
+        return res.status(400).json({ error: 'This custom package has already been purchased' });
+      }
+
+      // No permission check needed - if custom package is created for an organization/school,
+      // any admin of that organization/school can purchase it
+      // The custom package is already linked to the organization/school, so it's safe to allow purchase
+
+      pricing = customPackage.contractPricing;
+      packageName = customPackage.name || customPackage.basePackageId?.name || 'Custom Package';
+      packageDescription = customPackage.description || customPackage.basePackageId?.description || '';
+      billingType = pricing.billingType || 'one_time';
+      currency = pricing.currency || 'EUR';
+      seatLimit = customPackage.seatLimit || 5;
+    } else {
+      // Handle regular package purchase
+      package = await Package.findById(packageId);
+      if (!package) {
+        return res.status(404).json({ error: 'Package not found' });
+      }
+
+      if (package.status !== 'active' || package.visibility !== 'public') {
+        return res.status(400).json({ error: 'Package is not available for purchase' });
+      }
+
+      // Check if user already has this package
+      const existingMembership = user.memberships.find(
+        (m) => m.packageId.toString() === package._id.toString() && m.status === 'active'
+      );
+
+      if (existingMembership) {
+        return res.status(400).json({ error: 'You already have an active membership for this package' });
+      }
+
+      // Check if there's already a successful transaction for this user and package
+      const existingTransaction = await Transaction.findOne({
+        userId: req.userId,
+        packageId: package._id,
+        status: 'paid',
+      });
+
+      if (existingTransaction) {
+        return res.status(400).json({ error: 'You have already purchased this package' });
+      }
+
+      pricing = package.pricing;
+      packageName = package.name;
+      packageDescription = package.description || '';
+      billingType = pricing.billingType || 'one_time';
+      currency = pricing.currency || 'EUR';
+      seatLimit = package.maxSeats || 5;
     }
 
     if (!stripe) {
@@ -271,17 +345,17 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
     // Get frontend URL from environment or use default
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
 
-    // Prepare line items based on billing type
-    const isSubscription = package.pricing.billingType === 'subscription';
+    // Prepare line items based on billing type (handle both regular packages and custom packages)
+    const isSubscription = billingType === 'subscription';
     const lineItems = [
       {
         price_data: {
-          currency: package.pricing.currency?.toLowerCase() || 'eur',
+          currency: currency?.toLowerCase() || 'eur',
           product_data: {
-            name: package.name,
-            description: package.description || '',
+            name: packageName,
+            description: packageDescription || '',
           },
-          unit_amount: Math.round(package.pricing.amount * 100), // Convert to cents
+          unit_amount: Math.round(pricing.amount * 100), // Convert to cents
           // Add recurring for subscription mode
           ...(isSubscription && {
             recurring: {
@@ -293,6 +367,22 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       },
     ];
 
+    // Prepare metadata (different for custom packages vs regular packages)
+    const metadata = {
+      userId: req.userId.toString(),
+      productId: productId ? productId.toString() : '',
+      packageName: packageName,
+      uniqueCode: uniqueCode,
+      billingType: billingType || 'one_time',
+    };
+
+    // Add packageId or customPackageId to metadata
+    if (customPackageId) {
+      metadata.customPackageId = customPackageId.toString();
+    } else if (packageId) {
+      metadata.packageId = packageId.toString();
+    }
+
     // Create Stripe Checkout Session
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -300,14 +390,7 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       mode: isSubscription ? 'subscription' : 'payment',
       success_url: `${frontendUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}&uniqueCode=${uniqueCode}`,
       cancel_url: `${frontendUrl}/packages?canceled=true`,
-      metadata: {
-        userId: req.userId.toString(),
-        packageId: package._id.toString(),
-        productId: productId ? productId.toString() : '',
-        packageName: package.name,
-        uniqueCode: uniqueCode,
-        billingType: package.pricing.billingType || 'one_time',
-      },
+      metadata: metadata,
       customer_email: user.email,
     });
 
@@ -383,58 +466,165 @@ router.post('/webhook', async (req, res) => {
       // Only create transaction if it doesn't exist (prevent duplicates)
       if (!transaction) {
         const userId = session.metadata.userId;
-        const packageId = session.metadata.packageId;
-        const productId = session.metadata.productId || null;
+        const packageId = session.metadata.packageId || null;
+        const customPackageId = session.metadata.customPackageId || null;
+        let productId = session.metadata.productId || null; // Use let instead of const to allow updating
         const uniqueCode = session.metadata.uniqueCode;
         const billingType = session.metadata.billingType || 'one_time';
+        const seatLimit = parseInt(session.metadata.seatLimit) || 5;
 
-        // Verify user and package exist
+        // Verify user exists - fetch user with all fields
         const user = await User.findById(userId);
-        const package = await Package.findById(packageId);
-        
-        // Fetch product if productId is provided
-        let product = null;
-        if (productId) {
-          const Product = require('../models/Product');
-          product = await Product.findById(productId);
+        console.log('🔍 User data for transaction:', {
+          userId: user?._id,
+          schoolId: user?.schoolId,
+          organizationId: user?.organizationId,
+          email: user?.email
+        });
+
+        if (!user) {
+          console.error('User not found for checkout session:', session.id);
+          return res.json({ received: true, error: 'User not found' });
         }
 
-        if (!user || !package) {
-          console.error('User or Package not found for checkout session:', session.id);
-          return res.json({ received: true, error: 'User or Package not found' });
+        let package = null;
+        let customPackage = null;
+        let transactionType = 'b2c_purchase';
+        let packageType = 'standard';
+        let maxSeats = seatLimit;
+        let contractEndDate = null;
+
+        // Handle custom package purchase
+        if (customPackageId) {
+          const CustomPackage = require('../models/CustomPackage');
+          customPackage = await CustomPackage.findById(customPackageId)
+            .populate('basePackageId')
+            .populate('organizationId')
+            .populate('schoolId')
+            .populate('productIds'); // Populate productIds array
+          
+          if (!customPackage) {
+            console.error('Custom package not found for checkout session:', session.id);
+            return res.json({ received: true, error: 'Custom package not found' });
+          }
+
+          // Extract productId from productIds array (use first productId)
+          console.log(`🔍 Custom package productIds:`, customPackage.productIds);
+          console.log(`🔍 Custom package productIds type:`, typeof customPackage.productIds);
+          console.log(`🔍 Custom package productIds is array:`, Array.isArray(customPackage.productIds));
+          console.log(`🔍 Custom package productIds length:`, customPackage.productIds?.length || 0);
+          
+          if (customPackage.productIds && Array.isArray(customPackage.productIds) && customPackage.productIds.length > 0) {
+            const firstProduct = customPackage.productIds[0];
+            productId = firstProduct._id || firstProduct.id || firstProduct || null;
+            console.log(`✅ Extracted productId from custom package: ${productId}`);
+            console.log(`✅ First product details:`, {
+              _id: firstProduct._id,
+              id: firstProduct.id,
+              product: firstProduct
+            });
+          } else {
+            console.warn('⚠️ Custom package has no productIds array or it is empty');
+            console.warn('⚠️ Custom package ID:', customPackage._id);
+            console.warn('⚠️ Custom package data:', JSON.stringify(customPackage.toObject(), null, 2));
+          }
+
+          // Determine transaction type based on organization/school
+          if (customPackage.organizationId) {
+            const org = await Organization.findById(customPackage.organizationId);
+            transactionType = org?.segment === 'B2B' ? 'b2b_contract' : 'b2e_contract';
+          } else if (customPackage.schoolId) {
+            transactionType = 'b2e_contract';
+          }
+
+          packageType = customPackage.basePackageId?.packageType || customPackage.basePackageId?.type || 'standard';
+          maxSeats = customPackage.seatLimit || seatLimit;
+          contractEndDate = customPackage.contract?.endDate || null;
+
+          // Activate custom package
+          customPackage.status = 'active';
+          customPackage.contract.status = 'active';
+          await customPackage.save();
+        } else if (packageId) {
+          // Handle regular package purchase
+          package = await Package.findById(packageId);
+          
+          if (!package) {
+            console.error('Package not found for checkout session:', session.id);
+            return res.json({ received: true, error: 'Package not found' });
+          }
+
+          // Fetch product if productId is provided
+          let product = null;
+          if (productId) {
+            const Product = require('../models/Product');
+            product = await Product.findById(productId);
+          }
+
+          // Determine transaction type based on package targetAudiences or product targetAudience
+          transactionType = getTransactionType(package, product);
+          packageType = package.packageType || package.type || 'standard';
+          maxSeats = package.maxSeats || seatLimit;
+          // Calculate expiry date from expiryTime or use expiryDate (backward compatibility)
+          const calculatedExpiryDate = calculateExpiryDate(package, new Date());
+          contractEndDate = calculatedExpiryDate ? setEndOfDay(calculatedExpiryDate) : null;
+        } else {
+          console.error('Neither packageId nor customPackageId found in session metadata:', session.id);
+          return res.json({ received: true, error: 'Package ID or Custom Package ID required' });
         }
 
-        // Check if user already has this package (prevent duplicate memberships)
-        const existingMembership = user.memberships.find(
-          (m) => m.packageId.toString() === packageId && m.status === 'active'
-        );
+        // Check if user already has this package (prevent duplicate memberships) - only for regular packages
+        if (packageId && !customPackageId) {
+          const existingMembership = user.memberships.find(
+            (m) => m.packageId.toString() === packageId && m.status === 'active'
+          );
 
-        if (existingMembership) {
-          console.warn('User already has active membership for this package:', packageId);
-          return res.json({ received: true, warning: 'User already has membership' });
+          if (existingMembership) {
+            console.warn('User already has active membership for this package:', packageId);
+            return res.json({ received: true, warning: 'User already has membership' });
+          }
         }
 
         // Get payment amount from session
         const amount = session.amount_total ? session.amount_total / 100 : session.amount_subtotal / 100;
         const currency = session.currency?.toUpperCase() || 'EUR';
 
-        // Determine transaction type based on package targetAudiences or product targetAudience
-        const transactionType = getTransactionType(package, product);
-        console.log('🔍 Transaction Type Determination:', {
-          productId: productId,
-          productTargetAudience: product?.targetAudience,
-          packageTargetAudiences: package?.targetAudiences,
-          determinedType: transactionType
-        });
-
-        // Get package type (prefer packageType, fallback to type)
-        const packageType = package.packageType || package.type || 'standard';
+        // Get organizationId or schoolId from custom package or user
+        let organizationId = null;
+        let schoolId = null;
+        
+        if (customPackage) {
+          organizationId = customPackage.organizationId?._id || customPackage.organizationId || null;
+          schoolId = customPackage.schoolId?._id || customPackage.schoolId || null;
+        } else {
+          organizationId = user.organizationId || null;
+          schoolId = user.schoolId || null;
+        }
+        
+        // Also check if user is owner of school/organization
+        const Organization = require('../models/Organization');
+        const School = require('../models/School');
+        let ownerOrgId = null;
+        let ownerSchoolId = null;
+        
+        try {
+          const orgAsOwner = await Organization.findOne({ ownerId: user._id });
+          if (orgAsOwner) ownerOrgId = orgAsOwner._id;
+        } catch (e) {}
+        
+        try {
+          const schoolAsOwner = await School.findOne({ ownerId: user._id });
+          if (schoolAsOwner) ownerSchoolId = schoolAsOwner._id;
+        } catch (e) {}
 
         // Create transaction ONLY when payment succeeds
         transaction = await Transaction.create({
           type: transactionType,
           userId: userId,
-          packageId: packageId,
+          organizationId: organizationId || ownerOrgId, // Set organizationId from custom package, user, or owner
+          schoolId: schoolId || ownerSchoolId, // Set schoolId from custom package, user, or owner
+          packageId: packageId || null, // Regular package ID
+          customPackageId: customPackageId || null, // Custom package ID
           packageType: packageType,
           productId: productId || null,
           amount: amount,
@@ -443,55 +633,217 @@ router.post('/webhook', async (req, res) => {
           paymentProvider: 'stripe',
           stripePaymentIntentId: session.payment_intent || session.id,
           uniqueCode: uniqueCode,
-          maxSeats: package.maxSeats || 5, // Get from package, default to 5 if not set
+          maxSeats: maxSeats, // From custom package or regular package
           usedSeats: 0,
           codeApplications: 0,
           gamePlays: [],
           referrals: [],
           contractPeriod: {
             startDate: new Date(),
-            endDate: package.expiryDate
-              ? setEndOfDay(package.expiryDate)
-              : (billingType === 'subscription'
-                ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
-                : null),
+            endDate: contractEndDate || (billingType === 'subscription'
+              ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
+              : null),
           },
         });
 
-        // Determine membership type based on package targetAudiences or product targetAudience
-        const membershipType = getMembershipType(package, product);
-        console.log('🔍 Membership Type Determination:', {
-          productId: productId,
-          productTargetAudience: product?.targetAudience,
-          packageTargetAudiences: package?.targetAudiences,
-          determinedMembershipType: membershipType
-        });
+        // Add membership to user (only for regular packages, not custom packages)
+        if (packageId && !customPackageId) {
+          // Fetch product if productId is provided
+          let product = null;
+          if (productId) {
+            const Product = require('../models/Product');
+            product = await Product.findById(productId);
+          }
 
-        // Determine membership end date - use package expiryDate if available, otherwise use contractPeriod.endDate
-        let membershipEndDate = transaction.contractPeriod.endDate;
-        if (package.expiryDate) {
-          // If package has expiryDate, use it
-          membershipEndDate = new Date(package.expiryDate);
+          // Determine membership type based on package targetAudiences or product targetAudience
+          const membershipType = getMembershipType(package, product);
+          console.log('🔍 Membership Type Determination:', {
+            productId: productId,
+            productTargetAudience: product?.targetAudience,
+            packageTargetAudiences: package?.targetAudiences,
+            determinedMembershipType: membershipType
+          });
+
+          // Determine membership end date - use calculated expiry date from expiryTime or expiryDate
+          let membershipEndDate = transaction.contractPeriod.endDate;
+          const calculatedExpiryDate = calculateExpiryDate(package, transaction.contractPeriod.startDate);
+          if (calculatedExpiryDate) {
+            membershipEndDate = calculatedExpiryDate;
+          }
+
+          // Add membership to user
+          user.memberships.push({
+            packageId: packageId,
+            membershipType: membershipType,
+            status: 'active',
+            startDate: transaction.contractPeriod.startDate,
+            endDate: membershipEndDate,
+          });
+          await user.save();
         }
 
-        // Add membership to user
-        user.memberships.push({
-          packageId: packageId,
-          membershipType: membershipType,
-          status: 'active',
-          startDate: transaction.contractPeriod.startDate,
-          endDate: membershipEndDate,
-        });
-        await user.save();
+        // Add transaction to organization/school's transactionIds array
+        // Check if user is owner or member of school/organization
+        // Organization and School are already declared above
+        
+        const transactionIdStr = transaction._id.toString();
+        
+        // Store owner org/school IDs for later use
+        let orgAsOwner = null;
+        let schoolAsOwner = null;
+        
+        // First, check if user is owner of any organization
+        try {
+          orgAsOwner = await Organization.findOne({ ownerId: user._id });
+          if (orgAsOwner) {
+            if (!orgAsOwner.transactionIds) {
+              orgAsOwner.transactionIds = [];
+            }
+            const existingIds = orgAsOwner.transactionIds.map(id => id.toString());
+            if (!existingIds.includes(transactionIdStr)) {
+              orgAsOwner.transactionIds.push(transaction._id);
+              await orgAsOwner.save();
+              console.log(`✅ Transaction ${transactionIdStr} added to organization (owner) ${orgAsOwner._id} (${orgAsOwner.name})`);
+            }
+          }
+        } catch (orgOwnerErr) {
+          console.error('Error adding transaction to organization (owner):', orgOwnerErr);
+        }
+        
+        // Check if user is owner of any school
+        try {
+          schoolAsOwner = await SchoolModel3.findOne({ ownerId: user._id });
+          if (schoolAsOwner) {
+            if (!schoolAsOwner.transactionIds) {
+              schoolAsOwner.transactionIds = [];
+            }
+            const existingIds = schoolAsOwner.transactionIds.map(id => id.toString());
+            if (!existingIds.includes(transactionIdStr)) {
+              schoolAsOwner.transactionIds.push(transaction._id);
+              await schoolAsOwner.save();
+              console.log(`✅ Transaction ${transactionIdStr} added to school (owner) ${schoolAsOwner._id} (${schoolAsOwner.name})`);
+            }
+          }
+        } catch (schoolOwnerErr) {
+          console.error('Error adding transaction to school (owner):', schoolOwnerErr);
+        }
+        
+        // If user has organizationId, add to organization (as member)
+        if (user.organizationId) {
+          try {
+            const organization = await OrganizationModel4.findById(user.organizationId);
+            if (organization) {
+              // Initialize transactionIds if it doesn't exist
+              if (!organization.transactionIds) {
+                organization.transactionIds = [];
+              }
+              // Convert both to string for comparison
+              const existingIds = organization.transactionIds.map(id => id.toString());
+              if (!existingIds.includes(transactionIdStr)) {
+                organization.transactionIds.push(transaction._id);
+                await organization.save();
+                console.log(`✅ Transaction ${transactionIdStr} added to organization (member) ${organization._id} (${organization.name})`);
+              } else {
+                console.log(`⚠️ Transaction ${transactionIdStr} already exists in organization ${organization._id}`);
+              }
+            } else {
+              console.log(`❌ Organization not found with ID: ${user.organizationId}`);
+            }
+          } catch (orgErr) {
+            console.error('Error adding transaction to organization:', orgErr);
+          }
+        }
+        
+        // If user has schoolId, add to school (as member)
+        if (user.schoolId) {
+          try {
+            const school = await SchoolModel4.findById(user.schoolId);
+            if (school) {
+              // Initialize transactionIds if it doesn't exist
+              if (!school.transactionIds) {
+                school.transactionIds = [];
+              }
+              // Convert both to string for comparison
+              const existingIds = school.transactionIds.map(id => id.toString());
+              if (!existingIds.includes(transactionIdStr)) {
+                school.transactionIds.push(transaction._id);
+                await school.save();
+                console.log(`✅ Transaction ${transactionIdStr} added to school (member) ${school._id} (${school.name})`);
+              } else {
+                console.log(`⚠️ Transaction ${transactionIdStr} already exists in school ${school._id}`);
+              }
+            } else {
+              console.log(`❌ School not found with ID: ${user.schoolId}`);
+            }
+          } catch (schoolErr) {
+            console.error('Error adding transaction to school:', schoolErr);
+          }
+        }
+        
+        // Also add transaction to organization/school from transaction itself (for custom packages)
+        // This ensures custom packages are linked to the correct organization/school
+        if (transaction.organizationId) {
+          try {
+            const transactionOrg = await OrganizationModel4.findById(transaction.organizationId);
+            if (transactionOrg) {
+              // Skip if already added above
+              const alreadyAdded = 
+                (user.organizationId && user.organizationId.toString() === transaction.organizationId.toString()) ||
+                (orgAsOwner && orgAsOwner._id.toString() === transaction.organizationId.toString());
+              
+              if (!alreadyAdded) {
+                if (!transactionOrg.transactionIds) {
+                  transactionOrg.transactionIds = [];
+                }
+                const existingIds = transactionOrg.transactionIds.map(id => id.toString());
+                if (!existingIds.includes(transactionIdStr)) {
+                  transactionOrg.transactionIds.push(transaction._id);
+                  await transactionOrg.save();
+                  console.log(`✅ Transaction ${transactionIdStr} added to organization (from transaction) ${transactionOrg._id} (${transactionOrg.name})`);
+                }
+              }
+            }
+          } catch (txOrgErr) {
+            console.error('Error adding transaction to organization (from transaction):', txOrgErr);
+          }
+        }
+        
+        if (transaction.schoolId) {
+          try {
+            const transactionSchool = await SchoolModel4.findById(transaction.schoolId);
+            if (transactionSchool) {
+              // Skip if already added above
+              const alreadyAdded = 
+                (user.schoolId && user.schoolId.toString() === transaction.schoolId.toString()) ||
+                (schoolAsOwner && schoolAsOwner._id.toString() === transaction.schoolId.toString());
+              
+              if (!alreadyAdded) {
+                if (!transactionSchool.transactionIds) {
+                  transactionSchool.transactionIds = [];
+                }
+                const existingIds = transactionSchool.transactionIds.map(id => id.toString());
+                if (!existingIds.includes(transactionIdStr)) {
+                  transactionSchool.transactionIds.push(transaction._id);
+                  await transactionSchool.save();
+                  console.log(`✅ Transaction ${transactionIdStr} added to school (from transaction) ${transactionSchool._id} (${transactionSchool.name})`);
+                }
+              }
+            }
+          } catch (txSchoolErr) {
+            console.error('Error adding transaction to school (from transaction):', txSchoolErr);
+          }
+        }
 
         // Send transaction success email
         try {
           let organization = null;
           if (transaction.organizationId) {
-            const Organization = require('../models/Organization');
+            // Organization already declared above at line 444
             organization = await Organization.findById(transaction.organizationId);
           }
-          await sendTransactionSuccessEmail(transaction, user, package, organization);
+          // For custom packages, pass customPackage instead of package
+          const packageForEmail = customPackage || package;
+          await sendTransactionSuccessEmail(transaction, user, packageForEmail, organization);
         } catch (emailError) {
           console.error('Error sending transaction success email:', emailError);
           // Don't fail the transaction if email fails
@@ -517,7 +869,14 @@ router.post('/webhook', async (req, res) => {
         const uniqueCode = paymentIntent.metadata.uniqueCode;
         const billingType = paymentIntent.metadata.billingType || 'one_time';
 
+        // Fetch user with all fields
         const user = await User.findById(userId);
+        console.log('🔍 User data for transaction (payment_intent):', {
+          userId: user?._id,
+          schoolId: user?.schoolId,
+          organizationId: user?.organizationId,
+          email: user?.email
+        });
         const package = await Package.findById(packageId);
         
         // Fetch product if productId is provided
@@ -534,9 +893,31 @@ router.post('/webhook', async (req, res) => {
           // Get package type (prefer packageType, fallback to type)
           const packageType = package.packageType || package.type || 'standard';
 
+          // Get organizationId or schoolId from user if they have one
+          const organizationId = user.organizationId || null;
+          const schoolId = user.schoolId || null;
+          
+          // Also check if user is owner of school/organization
+          const OrganizationModel = require('../models/Organization');
+          const SchoolModel = require('../models/School');
+          let ownerOrgId = null;
+          let ownerSchoolId = null;
+          
+          try {
+            const orgAsOwner = await OrganizationModel.findOne({ ownerId: user._id });
+            if (orgAsOwner) ownerOrgId = orgAsOwner._id;
+          } catch (e) {}
+          
+          try {
+            const schoolAsOwner = await SchoolModel.findOne({ ownerId: user._id });
+            if (schoolAsOwner) ownerSchoolId = schoolAsOwner._id;
+          } catch (e) {}
+
           transaction = await Transaction.create({
             type: transactionType,
             userId: userId,
+            organizationId: organizationId || ownerOrgId, // Set organizationId from user or owner
+            schoolId: schoolId || ownerSchoolId, // Set schoolId from user or owner
             packageId: packageId,
             packageType: packageType,
             productId: productId || null,
@@ -553,22 +934,27 @@ router.post('/webhook', async (req, res) => {
             referrals: [],
             contractPeriod: {
               startDate: new Date(),
-              endDate: package.expiryDate
-                ? setEndOfDay(package.expiryDate)
-                : (billingType === 'subscription'
+              endDate: (() => {
+                const calculatedExpiryDate = calculateExpiryDate(package, new Date());
+                if (calculatedExpiryDate) {
+                  return setEndOfDay(calculatedExpiryDate);
+                }
+                // Fallback to subscription default (1 year) or null for one-time
+                return billingType === 'subscription'
                   ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
-                  : null),
+                  : null;
+              })(),
             },
           });
 
           // Determine membership type based on package targetAudiences or product targetAudience
           const membershipType = getMembershipType(package, product);
 
-          // Determine membership end date - use package expiryDate if available, otherwise use contractPeriod.endDate
+          // Determine membership end date - use calculated expiry date from expiryTime or expiryDate
           let membershipEndDate = transaction.contractPeriod.endDate;
-          if (package.expiryDate) {
-            // If package has expiryDate, use it
-            membershipEndDate = new Date(package.expiryDate);
+          const calculatedExpiryDate = calculateExpiryDate(package, transaction.contractPeriod.startDate);
+          if (calculatedExpiryDate) {
+            membershipEndDate = calculatedExpiryDate;
           }
 
           user.memberships.push({
@@ -580,12 +966,72 @@ router.post('/webhook', async (req, res) => {
           });
           await user.save();
 
+          // Add transaction to organization/school's transactionIds array
+          // Check both user.organizationId and user.schoolId separately
+          // Use OrganizationModel3 and SchoolModel3 to avoid redeclaration
+          
+          // If user has organizationId, add to organization
+          if (user.organizationId) {
+            try {
+              const organization = await OrganizationModel3.findById(user.organizationId);
+              if (organization) {
+                // Initialize transactionIds if it doesn't exist
+                if (!organization.transactionIds) {
+                  organization.transactionIds = [];
+                }
+                // Convert both to string for comparison
+                const transactionIdStr = transaction._id.toString();
+                const existingIds = organization.transactionIds.map(id => id.toString());
+                if (!existingIds.includes(transactionIdStr)) {
+                  organization.transactionIds.push(transaction._id);
+                  await organization.save();
+                  console.log(`✅ Transaction ${transactionIdStr} added to organization ${organization._id} (${organization.name})`);
+                } else {
+                  console.log(`⚠️ Transaction ${transactionIdStr} already exists in organization ${organization._id}`);
+                }
+              } else {
+                console.log(`❌ Organization not found with ID: ${user.organizationId}`);
+              }
+            } catch (orgErr) {
+              console.error('Error adding transaction to organization:', orgErr);
+            }
+          }
+          
+          // If user has schoolId, add to school
+          if (user.schoolId) {
+            try {
+              const school = await SchoolModel3.findById(user.schoolId);
+              if (school) {
+                // Initialize transactionIds if it doesn't exist
+                if (!school.transactionIds) {
+                  school.transactionIds = [];
+                }
+                // Convert both to string for comparison
+                const transactionIdStr = transaction._id.toString();
+                const existingIds = school.transactionIds.map(id => id.toString());
+                if (!existingIds.includes(transactionIdStr)) {
+                  school.transactionIds.push(transaction._id);
+                  await school.save();
+                  console.log(`✅ Transaction ${transactionIdStr} added to school ${school._id} (${school.name})`);
+                } else {
+                  console.log(`⚠️ Transaction ${transactionIdStr} already exists in school ${school._id}`);
+                }
+              } else {
+                console.log(`❌ School not found with ID: ${user.schoolId}`);
+              }
+            } catch (schoolErr) {
+              console.error('Error adding transaction to school:', schoolErr);
+            }
+          } else {
+            console.log('ℹ️ User does not have schoolId:', user._id);
+          }
+
           // Send transaction success email
           try {
             let organization = null;
             if (transaction.organizationId) {
-              const Organization = require('../models/Organization');
-              organization = await Organization.findById(transaction.organizationId);
+              // Use OrganizationModel3 already declared above
+              organization = await OrganizationModel3.findById(transaction.organizationId);
             }
             await sendTransactionSuccessEmail(transaction, user, package, organization);
           } catch (emailError) {
@@ -647,13 +1093,39 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
     // If transaction doesn't exist but payment is complete, create it (fallback for when webhook hasn't fired)
     if (!transaction && session.payment_status === 'paid') {
       const userId = session.metadata.userId;
-      const packageId = session.metadata.packageId;
+      const packageId = session.metadata.packageId || null;
+      const customPackageId = session.metadata.customPackageId || null;
       const uniqueCode = session.metadata.uniqueCode;
       const billingType = session.metadata.billingType || 'one_time';
 
-      // Verify user and package exist
+      // Verify user exists
       const user = await User.findById(userId);
-      const package = await Package.findById(packageId);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      let package = null;
+      let customPackage = null;
+      
+      // Handle custom package or regular package
+      if (customPackageId) {
+        const CustomPackage = require('../models/CustomPackage');
+        customPackage = await CustomPackage.findById(customPackageId)
+          .populate('basePackageId')
+          .populate('organizationId')
+          .populate('schoolId');
+        
+        if (!customPackage) {
+          return res.status(404).json({ error: 'Custom package not found' });
+        }
+      } else if (packageId) {
+        package = await Package.findById(packageId);
+        if (!package) {
+          return res.status(404).json({ error: 'Package not found' });
+        }
+      } else {
+        return res.status(400).json({ error: 'Package ID or Custom Package ID required' });
+      }
       
       // Fetch product if productId is provided
       const productId = session.metadata.productId || null;
@@ -663,31 +1135,113 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
         product = await Product.findById(productId);
       }
 
-      if (user && package) {
-        // Check if user already has this package
-        const existingMembership = user.memberships.find(
-          (m) => m.packageId.toString() === packageId && m.status === 'active'
-        );
+      // Handle both custom packages and regular packages
+      if (user && (package || customPackage)) {
+        // For regular packages, check if user already has this package
+        let shouldCreateTransaction = true;
+        if (package) {
+          const existingMembership = user.memberships.find(
+            (m) => m.packageId.toString() === packageId && m.status === 'active'
+          );
+          if (existingMembership) {
+            shouldCreateTransaction = false;
+          }
+        }
+        
+        // For custom packages, check if already purchased
+        if (customPackage) {
+          const existingTransaction = await Transaction.findOne({
+            $or: [
+              { organizationId: customPackage.organizationId, customPackageId: customPackage._id, status: 'paid' },
+              { schoolId: customPackage.schoolId, customPackageId: customPackage._id, status: 'paid' }
+            ]
+          });
+          if (existingTransaction) {
+            shouldCreateTransaction = false;
+            transaction = existingTransaction;
+          }
+        }
 
-        if (!existingMembership) {
+        if (shouldCreateTransaction) {
           // Get payment amount from session
           const amount = session.amount_total ? session.amount_total / 100 : session.amount_subtotal / 100;
           const currency = session.currency?.toUpperCase() || 'EUR';
 
-          // Determine transaction type based on package targetAudiences or product targetAudience
-          const transactionType = getTransactionType(package, product);
+          let transactionType = 'b2c_purchase';
+          let packageType = 'standard';
+          let maxSeats = 5;
+          let contractEndDate = null;
+          let organizationId = null;
+          let schoolId = null;
 
-          // Get package type (prefer packageType, fallback to type)
-          const packageType = package.packageType || package.type || 'standard';
+          // Handle custom package
+          if (customPackage) {
+            // Determine transaction type based on organization/school
+            const Organization = require('../models/Organization');
+            if (customPackage.organizationId) {
+              const org = await Organization.findById(customPackage.organizationId);
+              transactionType = org?.segment === 'B2B' ? 'b2b_contract' : 'b2e_contract';
+              organizationId = customPackage.organizationId._id || customPackage.organizationId;
+            } else if (customPackage.schoolId) {
+              transactionType = 'b2e_contract';
+              schoolId = customPackage.schoolId._id || customPackage.schoolId;
+            }
 
-          // Get productId from metadata if available
-          const productId = session.metadata.productId || null;
+            packageType = customPackage.basePackageId?.packageType || customPackage.basePackageId?.type || 'standard';
+            maxSeats = customPackage.seatLimit || 5;
+            contractEndDate = customPackage.contract?.endDate || null;
+
+            // Activate custom package
+            customPackage.status = 'active';
+            customPackage.contract.status = 'active';
+            await customPackage.save();
+          } else if (package) {
+            // Handle regular package
+            // Determine transaction type based on package targetAudiences or product targetAudience
+            transactionType = getTransactionType(package, product);
+            packageType = package.packageType || package.type || 'standard';
+            maxSeats = package.maxSeats || 5;
+            // Calculate expiry date from expiryTime or use expiryDate (backward compatibility)
+            const calculatedExpiryDate = calculateExpiryDate(package, new Date());
+            contractEndDate = calculatedExpiryDate ? setEndOfDay(calculatedExpiryDate) : null;
+            
+            // Get organizationId or schoolId from user if they have one
+            organizationId = user.organizationId || null;
+            schoolId = user.schoolId || null;
+          }
+          
+          // Also check if user is owner of school/organization
+          const OrganizationModel3 = require('../models/Organization');
+          const SchoolModel3 = require('../models/School');
+          let ownerOrgId = null;
+          let ownerSchoolId = null;
+          
+          try {
+            const orgAsOwner = await OrganizationModel3.findOne({ ownerId: user._id });
+            if (orgAsOwner) ownerOrgId = orgAsOwner._id;
+          } catch (e) {}
+          
+          try {
+            const schoolAsOwner = await SchoolModel3.findOne({ ownerId: user._id });
+            if (schoolAsOwner) ownerSchoolId = schoolAsOwner._id;
+          } catch (e) {}
+          
+          console.log('🔍 Fallback transaction - User data:', {
+            userId: user?._id,
+            schoolId: schoolId || user?.schoolId || ownerSchoolId,
+            organizationId: organizationId || user?.organizationId || ownerOrgId,
+            email: user?.email,
+            isCustomPackage: !!customPackage
+          });
 
           // Create transaction
           transaction = await Transaction.create({
             type: transactionType,
             userId: userId,
-            packageId: packageId,
+            organizationId: organizationId || ownerOrgId || (customPackage?.organizationId?._id || customPackage?.organizationId),
+            schoolId: schoolId || ownerSchoolId || (customPackage?.schoolId?._id || customPackage?.schoolId),
+            packageId: packageId || null,
+            customPackageId: customPackageId || null,
             packageType: packageType,
             productId: productId || null,
             amount: amount,
@@ -696,55 +1250,206 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             paymentProvider: 'stripe',
             stripePaymentIntentId: session.payment_intent || session.id,
             uniqueCode: uniqueCode,
-            maxSeats: package.maxSeats || 5, // Dynamic maxSeats from package
+            maxSeats: maxSeats,
             usedSeats: 0,
             codeApplications: 0,
             gamePlays: [],
             referrals: [],
             contractPeriod: {
               startDate: new Date(),
-              endDate: package.expiryDate
-                ? setEndOfDay(package.expiryDate)
-                : (billingType === 'subscription'
-                  ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
-                  : null),
+              endDate: contractEndDate || (billingType === 'subscription'
+                ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
+                : null),
             },
           });
 
-          // Determine membership type based on package targetAudiences or product targetAudience
-          const membershipType = getMembershipType(package, product);
-          console.log('🔍 Membership Type Determination (fallback):', {
-            productId: productId,
-            productTargetAudience: product?.targetAudience,
-            packageTargetAudiences: package?.targetAudiences,
-            determinedMembershipType: membershipType
-          });
+          // Add membership to user (only for regular packages, not custom packages)
+          if (package && !customPackage) {
+            // Determine membership type based on package targetAudiences or product targetAudience
+            const membershipType = getMembershipType(package, product);
+            console.log('🔍 Membership Type Determination (fallback):', {
+              productId: productId,
+              productTargetAudience: product?.targetAudience,
+              packageTargetAudiences: package?.targetAudiences,
+              determinedMembershipType: membershipType
+            });
 
-          // Determine membership end date - use package expiryDate if available, otherwise use contractPeriod.endDate
-          let membershipEndDate = transaction.contractPeriod.endDate;
-          if (package.expiryDate) {
-            // If package has expiryDate, use it
-            membershipEndDate = new Date(package.expiryDate);
+            // Determine membership end date - use calculated expiry date from expiryTime or expiryDate
+            let membershipEndDate = transaction.contractPeriod.endDate;
+            const calculatedExpiryDate = calculateExpiryDate(package, transaction.contractPeriod.startDate);
+            if (calculatedExpiryDate) {
+              membershipEndDate = calculatedExpiryDate;
+            }
+
+            // Add membership to user
+            user.memberships.push({
+              packageId: packageId,
+              membershipType: membershipType,
+              status: 'active',
+              startDate: transaction.contractPeriod.startDate,
+              endDate: membershipEndDate,
+            });
+            await user.save();
           }
 
-          // Add membership to user
-          user.memberships.push({
-            packageId: packageId,
-            membershipType: membershipType,
-            status: 'active',
-            startDate: transaction.contractPeriod.startDate,
-            endDate: membershipEndDate,
-          });
-          await user.save();
+          // Add transaction to organization/school's transactionIds array
+          // Use OrganizationModel3 and SchoolModel3 (already declared above)
+          
+          const transactionIdStr = transaction._id.toString();
+          
+          // First, check if user is owner of any organization
+          try {
+            const orgAsOwner = await OrganizationModel3.findOne({ ownerId: user._id });
+            if (orgAsOwner) {
+              if (!orgAsOwner.transactionIds) {
+                orgAsOwner.transactionIds = [];
+              }
+              const existingIds = orgAsOwner.transactionIds.map(id => id.toString());
+              if (!existingIds.includes(transactionIdStr)) {
+                orgAsOwner.transactionIds.push(transaction._id);
+                await orgAsOwner.save();
+                console.log(`✅ Transaction ${transactionIdStr} added to organization (owner) ${orgAsOwner._id} (${orgAsOwner.name}) - FALLBACK`);
+              }
+            }
+          } catch (orgOwnerErr) {
+            console.error('Error adding transaction to organization (owner) - FALLBACK:', orgOwnerErr);
+          }
+          
+          // Check if user is owner of any school
+          try {
+            const schoolAsOwner = await SchoolModel3.findOne({ ownerId: user._id });
+            if (schoolAsOwner) {
+              if (!schoolAsOwner.transactionIds) {
+                schoolAsOwner.transactionIds = [];
+              }
+              const existingIds = schoolAsOwner.transactionIds.map(id => id.toString());
+              if (!existingIds.includes(transactionIdStr)) {
+                schoolAsOwner.transactionIds.push(transaction._id);
+                await schoolAsOwner.save();
+                console.log(`✅ Transaction ${transactionIdStr} added to school (owner) ${schoolAsOwner._id} (${schoolAsOwner.name}) - FALLBACK`);
+              }
+            }
+          } catch (schoolOwnerErr) {
+            console.error('Error adding transaction to school (owner) - FALLBACK:', schoolOwnerErr);
+          }
+          
+          // If user has organizationId, add to organization (as member)
+          if (user.organizationId) {
+            try {
+              const organization = await OrganizationModel3.findById(user.organizationId);
+              if (organization) {
+                // Initialize transactionIds if it doesn't exist
+                if (!organization.transactionIds) {
+                  organization.transactionIds = [];
+                }
+                // Convert both to string for comparison
+                const existingIds = organization.transactionIds.map(id => id.toString());
+                if (!existingIds.includes(transactionIdStr)) {
+                  organization.transactionIds.push(transaction._id);
+                  await organization.save();
+                  console.log(`✅ Transaction ${transactionIdStr} added to organization (member) ${organization._id} (${organization.name}) - FALLBACK`);
+                } else {
+                  console.log(`⚠️ Transaction ${transactionIdStr} already exists in organization ${organization._id} - FALLBACK`);
+                }
+              } else {
+                console.log(`❌ Organization not found with ID: ${user.organizationId} - FALLBACK`);
+              }
+            } catch (orgErr) {
+              console.error('Error adding transaction to organization (fallback):', orgErr);
+            }
+          }
+          
+          // If user has schoolId, add to school (as member)
+          if (user.schoolId) {
+            try {
+              const school = await SchoolModel3.findById(user.schoolId);
+              if (school) {
+                // Initialize transactionIds if it doesn't exist
+                if (!school.transactionIds) {
+                  school.transactionIds = [];
+                }
+                // Convert both to string for comparison
+                const existingIds = school.transactionIds.map(id => id.toString());
+                if (!existingIds.includes(transactionIdStr)) {
+                  school.transactionIds.push(transaction._id);
+                  await school.save();
+                  console.log(`✅ Transaction ${transactionIdStr} added to school (member) ${school._id} (${school.name}) - FALLBACK`);
+                } else {
+                  console.log(`⚠️ Transaction ${transactionIdStr} already exists in school ${school._id} - FALLBACK`);
+                }
+              } else {
+                console.log(`❌ School not found with ID: ${user.schoolId} - FALLBACK`);
+              }
+            } catch (schoolErr) {
+              console.error('Error adding transaction to school (fallback):', schoolErr);
+            }
+          }
+          
+          // For custom packages, also add transaction to organization/school from custom package
+          if (customPackage) {
+            if (transaction.organizationId) {
+              try {
+                const transactionOrg = await OrganizationModel3.findById(transaction.organizationId);
+                if (transactionOrg) {
+                  // Skip if already added above
+                  const alreadyAdded = 
+                    (user.organizationId && user.organizationId.toString() === transaction.organizationId.toString()) ||
+                    (orgAsOwner && orgAsOwner._id.toString() === transaction.organizationId.toString());
+                  
+                  if (!alreadyAdded) {
+                    if (!transactionOrg.transactionIds) {
+                      transactionOrg.transactionIds = [];
+                    }
+                    const existingIds = transactionOrg.transactionIds.map(id => id.toString());
+                    if (!existingIds.includes(transactionIdStr)) {
+                      transactionOrg.transactionIds.push(transaction._id);
+                      await transactionOrg.save();
+                      console.log(`✅ Transaction ${transactionIdStr} added to organization (from custom package) ${transactionOrg._id} (${transactionOrg.name}) - FALLBACK`);
+                    }
+                  }
+                }
+              } catch (txOrgErr) {
+                console.error('Error adding transaction to organization (from custom package) - FALLBACK:', txOrgErr);
+              }
+            }
+            
+            if (transaction.schoolId) {
+              try {
+                const transactionSchool = await SchoolModel3.findById(transaction.schoolId);
+                if (transactionSchool) {
+                  // Skip if already added above
+                  const alreadyAdded = 
+                    (user.schoolId && user.schoolId.toString() === transaction.schoolId.toString()) ||
+                    (schoolAsOwner && schoolAsOwner._id.toString() === transaction.schoolId.toString());
+                  
+                  if (!alreadyAdded) {
+                    if (!transactionSchool.transactionIds) {
+                      transactionSchool.transactionIds = [];
+                    }
+                    const existingIds = transactionSchool.transactionIds.map(id => id.toString());
+                    if (!existingIds.includes(transactionIdStr)) {
+                      transactionSchool.transactionIds.push(transaction._id);
+                      await transactionSchool.save();
+                      console.log(`✅ Transaction ${transactionIdStr} added to school (from custom package) ${transactionSchool._id} (${transactionSchool.name}) - FALLBACK`);
+                    }
+                  }
+                }
+              } catch (txSchoolErr) {
+                console.error('Error adding transaction to school (from custom package) - FALLBACK:', txSchoolErr);
+              }
+            }
+          }
 
           // Send transaction success email
           try {
             let organization = null;
             if (transaction.organizationId) {
-              const Organization = require('../models/Organization');
-              organization = await Organization.findById(transaction.organizationId);
+              // Use OrganizationModel3 already declared above
+              organization = await OrganizationModel3.findById(transaction.organizationId);
             }
-            await sendTransactionSuccessEmail(transaction, user, package, organization);
+            // For custom packages, pass customPackage instead of package
+            const packageForEmail = customPackage || package;
+            await sendTransactionSuccessEmail(transaction, user, packageForEmail, organization);
           } catch (emailError) {
             console.error('Error sending transaction success email:', emailError);
             // Don't fail the transaction if email fails
@@ -755,6 +1460,7 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
           // Populate transaction for response
           transaction = await Transaction.findById(transaction._id)
             .populate('packageId', 'name')
+            .populate('customPackageId', 'name')
             .populate('userId', 'name email');
         }
       }
@@ -794,7 +1500,21 @@ router.get('/check-purchase-code/:code', async (req, res) => {
       uniqueCode: code,
     })
       .populate('packageId', 'name description type packageType')
+      .populate('customPackageId') // Populate custom package
+      .populate('productId', 'name description') // Populate productId
       .populate('userId', 'name email');
+    
+    // If custom package exists and productId is not set, get it from custom package
+    if (transaction?.customPackageId && !transaction.productId) {
+      const CustomPackage = require('../models/CustomPackage');
+      const customPackage = await CustomPackage.findById(transaction.customPackageId)
+        .populate('productIds');
+      
+      if (customPackage?.productIds && Array.isArray(customPackage.productIds) && customPackage.productIds.length > 0) {
+        transaction.productId = customPackage.productIds[0]._id || customPackage.productIds[0].id || customPackage.productIds[0];
+        console.log(`✅ Extracted productId from custom package for check: ${transaction.productId}`);
+      }
+    }
 
     if (!transaction) {
       return res.json({ valid: false, message: 'Invalid code' });
@@ -854,8 +1574,9 @@ router.get('/check-purchase-code/:code', async (req, res) => {
       valid: true,
       transaction: {
         id: transaction._id,
-        packageName: transaction.packageId?.name,
+        packageName: transaction.packageId?.name || transaction.customPackageId?.name,
         packageType: packageType, // Include package type for frontend validation
+        productId: transaction.productId?._id || transaction.productId?.id || transaction.productId || null, // Include productId
         remainingSeats: remainingSeats,
         maxSeats: transaction.maxSeats || 5,
         usedSeats: transaction.usedSeats || 0,
@@ -889,7 +1610,21 @@ router.post('/use-purchase-code', authenticateToken, async (req, res) => {
       uniqueCode: code,
     })
       .populate('packageId', 'name type packageType')
+      .populate('customPackageId') // Populate custom package
+      .populate('productId', 'name description') // Populate productId
       .populate('userId', 'name email');
+    
+    // If custom package exists and productId is not set, get it from custom package
+    if (transaction?.customPackageId && !transaction.productId) {
+      const CustomPackage = require('../models/CustomPackage');
+      const customPackage = await CustomPackage.findById(transaction.customPackageId)
+        .populate('productIds');
+      
+      if (customPackage?.productIds && Array.isArray(customPackage.productIds) && customPackage.productIds.length > 0) {
+        transaction.productId = customPackage.productIds[0]._id || customPackage.productIds[0].id || customPackage.productIds[0];
+        console.log(`✅ Extracted productId from custom package for use: ${transaction.productId}`);
+      }
+    }
 
     if (!transaction) {
       return res.status(404).json({ error: 'Invalid purchase code' });
@@ -950,6 +1685,7 @@ router.post('/use-purchase-code', authenticateToken, async (req, res) => {
       transaction: {
         ...transaction.toObject(),
         packageType: packageType, // Include package type for frontend validation
+        productId: transaction.productId?._id || transaction.productId?.id || transaction.productId || null, // Include productId
         remainingSeats: (transaction.maxSeats || 5) - (transaction.usedSeats || 0),
         maxSeats: transaction.maxSeats || 5,
         usedSeats: transaction.usedSeats || 0,
@@ -984,7 +1720,21 @@ router.post('/start-purchase-game-play', authenticateToken, async (req, res) => 
     const transaction = await Transaction.findOne({
       uniqueCode: code,
     })
-      .populate('packageId', 'name type packageType');
+      .populate('packageId', 'name type packageType')
+      .populate('customPackageId') // Populate custom package
+      .populate('productId', 'name description'); // Populate productId
+    
+    // If custom package exists and productId is not set, get it from custom package
+    if (transaction?.customPackageId && !transaction.productId) {
+      const CustomPackage = require('../models/CustomPackage');
+      const customPackage = await CustomPackage.findById(transaction.customPackageId)
+        .populate('productIds');
+      
+      if (customPackage?.productIds && Array.isArray(customPackage.productIds) && customPackage.productIds.length > 0) {
+        transaction.productId = customPackage.productIds[0]._id || customPackage.productIds[0].id || customPackage.productIds[0];
+        console.log(`✅ Extracted productId from custom package for start-game-play: ${transaction.productId}`);
+      }
+    }
 
     if (!transaction) {
       return res.status(404).json({ error: 'Invalid purchase code' });
@@ -1050,10 +1800,65 @@ router.post('/start-purchase-game-play', authenticateToken, async (req, res) => 
 
     await transaction.save();
 
+    // Update organization/school seatUsage if transaction belongs to one
+    if (transaction.organizationId) {
+      try {
+        const Organization = require('../models/Organization');
+        const organization = await Organization.findById(transaction.organizationId);
+        if (organization) {
+          // Calculate total used seats from all transactions and free trials for this organization
+          const orgTransactions = await Transaction.find({ 
+            organizationId: transaction.organizationId,
+            status: 'paid'
+          });
+          const orgFreeTrials = await FreeTrial.find({ 
+            organizationId: transaction.organizationId
+          });
+          
+          const transactionUsedSeats = orgTransactions.reduce((sum, tx) => sum + (tx.usedSeats || 0), 0);
+          const freeTrialUsedSeats = orgFreeTrials.reduce((sum, ft) => sum + (ft.usedSeats || 0), 0);
+          const totalUsedSeats = transactionUsedSeats + freeTrialUsedSeats;
+          
+          if (!organization.seatUsage) {
+            organization.seatUsage = { seatLimit: 0, usedSeats: 0, status: 'prospect' };
+          }
+          organization.seatUsage.usedSeats = totalUsedSeats;
+          await organization.save();
+        }
+      } catch (err) {
+        console.error('Error updating organization seatUsage:', err);
+      }
+    }
+
+    if (transaction.schoolId) {
+      try {
+        const School = require('../models/School');
+        const school = await School.findById(transaction.schoolId);
+        if (school) {
+          // Calculate total used seats from all transactions for this school
+          // Note: Free trials don't have schoolId, only organizationId
+          const schoolTransactions = await Transaction.find({ 
+            schoolId: transaction.schoolId,
+            status: 'paid'
+          });
+          const totalUsedSeats = schoolTransactions.reduce((sum, tx) => sum + (tx.usedSeats || 0), 0);
+          
+          if (!school.seatUsage) {
+            school.seatUsage = { seatLimit: 0, usedSeats: 0, status: 'prospect' };
+          }
+          school.seatUsage.usedSeats = totalUsedSeats;
+          await school.save();
+        }
+      } catch (err) {
+        console.error('Error updating school seatUsage:', err);
+      }
+    }
+
     res.json({
       message: 'Game play started successfully',
       transaction: {
         ...transaction.toObject(),
+        productId: transaction.productId?._id || transaction.productId?.id || transaction.productId || null, // Include productId
         remainingSeats: maxSeats - transaction.usedSeats,
         maxSeats: maxSeats,
         usedSeats: transaction.usedSeats,
@@ -1065,6 +1870,140 @@ router.post('/start-purchase-game-play', authenticateToken, async (req, res) => 
   } catch (error) {
     console.error('Error starting purchase game play:', error);
     res.status(500).json({ error: 'Server error: ' + error.message });
+  }
+});
+
+// Admin endpoint to fix existing transactions - add them to school/organization transactionIds
+router.post('/fix-transactions', authenticateToken, async (req, res) => {
+  try {
+    const User = require('../models/User');
+    const Organization = require('../models/Organization');
+    const School = require('../models/School');
+    
+    // Get all transactions
+    const transactions = await Transaction.find({}).populate('userId', 'schoolId organizationId');
+    
+    let fixed = 0;
+    let errors = [];
+    
+    for (const transaction of transactions) {
+      try {
+        const user = transaction.userId;
+        if (!user) continue;
+        
+        const transactionIdStr = transaction._id.toString();
+        
+        // Check if user is owner of any organization
+        try {
+          const orgAsOwner = await Organization.findOne({ ownerId: user._id });
+          if (orgAsOwner) {
+            if (!orgAsOwner.transactionIds) {
+              orgAsOwner.transactionIds = [];
+            }
+            const existingIds = orgAsOwner.transactionIds.map(id => id.toString());
+            if (!existingIds.includes(transactionIdStr)) {
+              orgAsOwner.transactionIds.push(transaction._id);
+              await orgAsOwner.save();
+              fixed++;
+              console.log(`✅ Fixed: Transaction ${transactionIdStr} added to organization (owner) ${orgAsOwner._id}`);
+            }
+            
+            // Also update transaction with organizationId
+            if (!transaction.organizationId) {
+              transaction.organizationId = orgAsOwner._id;
+            }
+          }
+        } catch (e) {
+          console.error('Error checking organization owner:', e);
+        }
+        
+        // Check if user is owner of any school
+        try {
+          const schoolAsOwner = await School.findOne({ ownerId: user._id });
+          if (schoolAsOwner) {
+            if (!schoolAsOwner.transactionIds) {
+              schoolAsOwner.transactionIds = [];
+            }
+            const existingIds = schoolAsOwner.transactionIds.map(id => id.toString());
+            if (!existingIds.includes(transactionIdStr)) {
+              schoolAsOwner.transactionIds.push(transaction._id);
+              await schoolAsOwner.save();
+              fixed++;
+              console.log(`✅ Fixed: Transaction ${transactionIdStr} added to school (owner) ${schoolAsOwner._id}`);
+            }
+            
+            // Also update transaction with schoolId
+            if (!transaction.schoolId) {
+              transaction.schoolId = schoolAsOwner._id;
+            }
+          }
+        } catch (e) {
+          console.error('Error checking school owner:', e);
+        }
+        
+        // Add to organization's transactionIds (as member)
+        if (user.organizationId) {
+          const organization = await Organization.findById(user.organizationId);
+          if (organization) {
+            if (!organization.transactionIds) {
+              organization.transactionIds = [];
+            }
+            const existingIds = organization.transactionIds.map(id => id.toString());
+            if (!existingIds.includes(transactionIdStr)) {
+              organization.transactionIds.push(transaction._id);
+              await organization.save();
+              fixed++;
+              console.log(`✅ Fixed: Transaction ${transactionIdStr} added to organization (member) ${organization._id}`);
+            }
+            
+            // Also update transaction with organizationId
+            if (!transaction.organizationId) {
+              transaction.organizationId = user.organizationId;
+            }
+          }
+        }
+        
+        // Add to school's transactionIds (as member)
+        if (user.schoolId) {
+          const school = await School.findById(user.schoolId);
+          if (school) {
+            if (!school.transactionIds) {
+              school.transactionIds = [];
+            }
+            const existingIds = school.transactionIds.map(id => id.toString());
+            if (!existingIds.includes(transactionIdStr)) {
+              school.transactionIds.push(transaction._id);
+              await school.save();
+              fixed++;
+              console.log(`✅ Fixed: Transaction ${transactionIdStr} added to school (member) ${school._id}`);
+            }
+            
+            // Also update transaction with schoolId
+            if (!transaction.schoolId) {
+              transaction.schoolId = user.schoolId;
+            }
+          }
+        }
+        
+        // Save transaction if we updated it
+        if (transaction.isModified()) {
+          await transaction.save();
+        }
+      } catch (err) {
+        errors.push({ transactionId: transaction._id, error: err.message });
+        console.error('Error fixing transaction:', err);
+      }
+    }
+    
+    res.json({
+      message: `Fixed ${fixed} transactions`,
+      total: transactions.length,
+      fixed,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    console.error('Error fixing transactions:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 

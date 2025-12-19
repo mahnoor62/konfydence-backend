@@ -16,6 +16,10 @@ const TransactionSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: 'Organization'
     },
+    schoolId: {
+      type: Schema.Types.ObjectId,
+      ref: 'School'
+    },
     packageId: {
       type: Schema.Types.ObjectId,
       ref: 'Package'

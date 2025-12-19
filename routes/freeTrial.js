@@ -513,6 +513,36 @@ router.post('/start-game-play', authenticateToken, async (req, res) => {
 
     await freeTrial.save();
 
+    // Update organization seatUsage if free trial belongs to one
+    if (freeTrial.organizationId) {
+      try {
+        const Organization = require('../models/Organization');
+        const organization = await Organization.findById(freeTrial.organizationId);
+        if (organization) {
+          // Calculate total used seats from all transactions and free trials for this organization
+          const orgTransactions = await Transaction.find({ 
+            organizationId: freeTrial.organizationId,
+            status: 'paid'
+          });
+          const orgFreeTrials = await FreeTrial.find({ 
+            organizationId: freeTrial.organizationId
+          });
+          
+          const transactionUsedSeats = orgTransactions.reduce((sum, tx) => sum + (tx.usedSeats || 0), 0);
+          const freeTrialUsedSeats = orgFreeTrials.reduce((sum, ft) => sum + (ft.usedSeats || 0), 0);
+          const totalUsedSeats = transactionUsedSeats + freeTrialUsedSeats;
+          
+          if (!organization.seatUsage) {
+            organization.seatUsage = { seatLimit: 0, usedSeats: 0, status: 'prospect' };
+          }
+          organization.seatUsage.usedSeats = totalUsedSeats;
+          await organization.save();
+        }
+      } catch (err) {
+        console.error('Error updating organization seatUsage:', err);
+      }
+    }
+
     res.json({
       message: 'Game play started successfully',
       trial: {

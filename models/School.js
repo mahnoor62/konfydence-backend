@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const { Schema } = mongoose;
 const crypto = require('crypto');
 
-const OrganizationSchema = new Schema(
+const SchoolSchema = new Schema(
   {
     name: {
       type: String,
@@ -11,12 +11,7 @@ const OrganizationSchema = new Schema(
     },
     type: {
       type: String,
-      enum: ['company', 'bank', 'school', 'govt', 'other'],
-      required: true
-    },
-    segment: {
-      type: String,
-      enum: ['B2B', 'B2E'],
+      enum: ['school', 'govt', 'other'],
       required: true
     },
     customType: {
@@ -66,6 +61,16 @@ const OrganizationSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: 'CustomPackage'
     }],
+    // Track students linked to this school (similar to Organization.members)
+    students: [{
+      type: Schema.Types.ObjectId,
+      ref: 'User'
+    }],
+    // Track transactions (package purchases) for this school
+    transactionIds: [{
+      type: Schema.Types.ObjectId,
+      ref: 'Transaction'
+    }],
     seatUsage: {
       seatLimit: {
         type: Number,
@@ -81,19 +86,6 @@ const OrganizationSchema = new Schema(
       enum: ['active', 'expired', 'prospect'],
       default: 'prospect'
     },
-    // Track members linked to this organization
-    members: {
-      type: [{
-        type: Schema.Types.ObjectId,
-        ref: 'User'
-      }],
-      default: []
-    },
-    // Track transactions (package purchases) for this organization
-    transactionIds: [{
-      type: Schema.Types.ObjectId,
-      ref: 'Transaction'
-    }],
     ownerId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
@@ -104,14 +96,14 @@ const OrganizationSchema = new Schema(
 );
 
 // Generate unique code before saving
-OrganizationSchema.pre('save', async function(next) {
+SchoolSchema.pre('save', async function(next) {
   if (!this.uniqueCode) {
     let code;
     let isUnique = false;
-    const Organization = this.constructor;
+    const School = this.constructor;
     while (!isUnique) {
-      code = 'ORG-' + crypto.randomBytes(4).toString('hex').toUpperCase();
-      const existing = await Organization.findOne({ uniqueCode: code });
+      code = 'SCH-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+      const existing = await School.findOne({ uniqueCode: code });
       if (!existing) {
         isUnique = true;
       }
@@ -121,4 +113,5 @@ OrganizationSchema.pre('save', async function(next) {
   next();
 });
 
-module.exports = mongoose.model('Organization', OrganizationSchema);
+module.exports = mongoose.model('School', SchoolSchema);
+

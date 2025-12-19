@@ -37,16 +37,23 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Get transactions
+    // Get transactions - Populate ALL fields
     const transactions = await Transaction.find({ userId: req.userId })
-      .populate('packageId', 'name pricing')
-      .populate('customPackageId', 'name')
+      .populate('packageId') // Populate ALL fields from Package table
+      .populate('customPackageId') // Populate ALL fields from CustomPackage
+      .populate('organizationId') // Populate ALL fields from Organization
+      .populate('schoolId') // Populate ALL fields from School
+      .populate('productId') // Populate ALL fields from Product
+      .populate('gamePlays.userId') // Populate ALL fields from User in gamePlays
       .sort({ createdAt: -1 })
       .limit(20);
 
-    // Get all transactions for user (to link with memberships)
+    // Get all transactions for user (to link with memberships) - Populate ALL fields
     const allTransactions = await Transaction.find({ userId: req.userId })
-      .populate('packageId', 'name')
+      .populate('packageId') // Populate ALL fields from Package table
+      .populate('customPackageId') // Populate ALL fields from CustomPackage
+      .populate('organizationId') // Populate ALL fields from Organization
+      .populate('schoolId') // Populate ALL fields from School
       .sort({ createdAt: -1 });
 
     // Create a map of packageId to transactions
@@ -61,150 +68,271 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
       }
     });
 
-    // Get game progress (all levels completed by user)
-    const gameProgress = await GameProgress.find({ userId: req.userId })
-      .populate('cardId', 'title referenceCode category')
+    // Get game progress - new structure: one document per user per level
+    const allProgressDocs = await GameProgress.find({ userId: req.userId })
       .populate('packageId', 'name')
       .populate('transactionId', 'packageId uniqueCode')
-      .sort({ completedAt: -1 });
+      .populate('cardId', 'title referenceCode category')
+      .sort({ levelNumber: 1 });
 
-    // Group game progress by transaction/membership
+    // Populate cardId in all cards arrays
+    const Card = require('../models/Card');
+    for (let progressDoc of allProgressDocs) {
+      if (progressDoc.cards && Array.isArray(progressDoc.cards)) {
+        for (let card of progressDoc.cards) {
+          if (card.cardId && typeof card.cardId !== 'object') {
+            try {
+              const cardDoc = await Card.findById(card.cardId).select('title referenceCode category');
+              if (cardDoc) {
+                card.cardId = cardDoc;
+              }
+            } catch (err) {
+              console.error('Error populating card:', err);
+            }
+          }
+        }
+      }
+    }
+
+    // Combine all level documents into a single structure for compatibility
+    const gameProgressDoc = allProgressDocs.length > 0 ? {
+      userId: allProgressDocs[0].userId,
+      packageId: allProgressDocs[0].packageId,
+      productId: allProgressDocs[0].productId,
+      transactionId: allProgressDocs[0].transactionId,
+      freeTrialId: allProgressDocs[0].freeTrialId,
+      level1: allProgressDocs.find(p => p.levelNumber === 1)?.cards || [],
+      level1Stats: allProgressDocs.find(p => p.levelNumber === 1) ? {
+        totalScore: allProgressDocs.find(p => p.levelNumber === 1).totalScore,
+        maxScore: allProgressDocs.find(p => p.levelNumber === 1).maxScore,
+        correctAnswers: allProgressDocs.find(p => p.levelNumber === 1).correctAnswers,
+        totalQuestions: allProgressDocs.find(p => p.levelNumber === 1).totalQuestions,
+        percentageScore: allProgressDocs.find(p => p.levelNumber === 1).percentageScore,
+        completedAt: allProgressDocs.find(p => p.levelNumber === 1).completedAt
+      } : {},
+      level2: allProgressDocs.find(p => p.levelNumber === 2)?.cards || [],
+      level2Stats: allProgressDocs.find(p => p.levelNumber === 2) ? {
+        totalScore: allProgressDocs.find(p => p.levelNumber === 2).totalScore,
+        maxScore: allProgressDocs.find(p => p.levelNumber === 2).maxScore,
+        correctAnswers: allProgressDocs.find(p => p.levelNumber === 2).correctAnswers,
+        totalQuestions: allProgressDocs.find(p => p.levelNumber === 2).totalQuestions,
+        percentageScore: allProgressDocs.find(p => p.levelNumber === 2).percentageScore,
+        completedAt: allProgressDocs.find(p => p.levelNumber === 2).completedAt
+      } : {},
+      level3: allProgressDocs.find(p => p.levelNumber === 3)?.cards || [],
+      level3Stats: allProgressDocs.find(p => p.levelNumber === 3) ? {
+        totalScore: allProgressDocs.find(p => p.levelNumber === 3).totalScore,
+        maxScore: allProgressDocs.find(p => p.levelNumber === 3).maxScore,
+        correctAnswers: allProgressDocs.find(p => p.levelNumber === 3).correctAnswers,
+        totalQuestions: allProgressDocs.find(p => p.levelNumber === 3).totalQuestions,
+        percentageScore: allProgressDocs.find(p => p.levelNumber === 3).percentageScore,
+        completedAt: allProgressDocs.find(p => p.levelNumber === 3).completedAt
+      } : {}
+    } : null;
+
+    // Group game progress by transaction/membership - new structure: one document with level arrays
     const progressByTransaction = {};
     const progressByPackage = {};
     
-    gameProgress.forEach((progress) => {
-      const transactionId = progress.transactionId?._id?.toString() || progress.transactionId?.toString();
-      const packageId = progress.packageId?._id?.toString() || progress.packageId?.toString();
+    if (gameProgressDoc) {
+      const transactionId = gameProgressDoc.transactionId?._id?.toString() || gameProgressDoc.transactionId?.toString();
+      const packageId = gameProgressDoc.packageId?._id?.toString() || gameProgressDoc.packageId?.toString();
       
-      // Group by transaction
-      if (transactionId) {
-        if (!progressByTransaction[transactionId]) {
-          progressByTransaction[transactionId] = {
-            transactionId: transactionId,
-            packageId: packageId,
-            packageName: progress.packageId?.name || 'Unknown',
-            levelsByCard: {},
-            totalLevelsPlayed: 0,
-            totalScore: 0,
-            maxScore: 0,
-            correctAnswers: 0,
-            totalQuestions: 0
-          };
-        }
-        const txProgress = progressByTransaction[transactionId];
-        const cardId = progress.cardId?._id?.toString() || progress.cardId?.toString();
-        if (!txProgress.levelsByCard[cardId]) {
-          txProgress.levelsByCard[cardId] = {
-            cardId: cardId,
-            cardTitle: progress.cardId?.title || 'Unknown Card',
-            levels: [],
-            totalScore: 0,
-            maxScore: 0,
-            correctAnswers: 0,
-            totalQuestions: 0
-          };
-        }
-        txProgress.levelsByCard[cardId].levels.push({
-          levelNumber: progress.levelNumber,
-          score: progress.totalScore,
-          maxScore: progress.maxScore,
-          correctAnswers: progress.correctAnswers,
-          totalQuestions: progress.totalQuestions,
-          percentageScore: progress.percentageScore,
-          completedAt: progress.completedAt
-        });
-        txProgress.levelsByCard[cardId].totalScore += progress.totalScore;
-        txProgress.levelsByCard[cardId].maxScore += progress.maxScore;
-        txProgress.levelsByCard[cardId].correctAnswers += progress.correctAnswers;
-        txProgress.levelsByCard[cardId].totalQuestions += progress.totalQuestions;
-        txProgress.totalLevelsPlayed += 1;
-        txProgress.totalScore += progress.totalScore;
-        txProgress.maxScore += progress.maxScore;
-        txProgress.correctAnswers += progress.correctAnswers;
-        txProgress.totalQuestions += progress.totalQuestions;
-      }
-      
-      // Also group by package (for free trials or progress without transaction)
-      if (packageId) {
-        if (!progressByPackage[packageId]) {
-          progressByPackage[packageId] = {
-            packageId: packageId,
-            packageName: progress.packageId?.name || 'Unknown',
-            levelsByCard: {},
-            totalLevelsPlayed: 0,
-            totalScore: 0,
-            maxScore: 0,
-            correctAnswers: 0,
-            totalQuestions: 0
-          };
-        }
-        const pkgProgress = progressByPackage[packageId];
-        const cardId = progress.cardId?._id?.toString() || progress.cardId?.toString();
-        if (!pkgProgress.levelsByCard[cardId]) {
-          pkgProgress.levelsByCard[cardId] = {
-            cardId: cardId,
-            cardTitle: progress.cardId?.title || 'Unknown Card',
-            levels: [],
-            totalScore: 0,
-            maxScore: 0,
-            correctAnswers: 0,
-            totalQuestions: 0
-          };
-        }
-        // Only add if not already added via transaction
-        if (!transactionId) {
-          pkgProgress.levelsByCard[cardId].levels.push({
-            levelNumber: progress.levelNumber,
-            score: progress.totalScore,
-            maxScore: progress.maxScore,
-            correctAnswers: progress.correctAnswers,
-            totalQuestions: progress.totalQuestions,
-            percentageScore: progress.percentageScore,
-            completedAt: progress.completedAt
+      // Process each level (1, 2, 3)
+      for (let levelNum of [1, 2, 3]) {
+        const levelArray = gameProgressDoc[`level${levelNum}`] || [];
+        const levelStats = gameProgressDoc[`level${levelNum}Stats`] || {};
+        
+        if (levelArray.length === 0) continue;
+        
+        // levelArray now contains cards, not questions
+        // Each card has: cardId, cardTitle, questions[], cardTotalScore, cardMaxScore, etc.
+        
+        // Group by transaction
+        if (transactionId) {
+          if (!progressByTransaction[transactionId]) {
+            progressByTransaction[transactionId] = {
+              transactionId: transactionId,
+              packageId: packageId,
+              packageName: gameProgressDoc.packageId?.name || 'Unknown',
+              levelsByCard: {},
+              totalLevelsPlayed: 0,
+              totalScore: 0,
+              maxScore: 0,
+              correctAnswers: 0,
+              totalQuestions: 0
+            };
+          }
+          const txProgress = progressByTransaction[transactionId];
+          
+          // Process each card in the level
+          levelArray.forEach(card => {
+            const cardIdStr = card.cardId?._id?.toString() || card.cardId?.toString();
+            if (!cardIdStr) return;
+            
+            if (!txProgress.levelsByCard[cardIdStr]) {
+              const cardTitle = card.cardTitle || card.cardId?.title || 'Unknown Card';
+              
+              txProgress.levelsByCard[cardIdStr] = {
+                cardId: cardIdStr,
+                cardTitle: cardTitle,
+                levels: [],
+                totalScore: 0,
+                maxScore: 0,
+                correctAnswers: 0,
+                totalQuestions: 0
+              };
+            }
+            
+            // Use card stats directly
+            const cardScore = card.cardTotalScore || 0;
+            const cardCorrect = card.cardCorrectAnswers || 0;
+            const cardTotal = card.cardTotalQuestions || 0;
+            const cardMaxScore = card.cardMaxScore || (cardTotal * 4);
+            
+            txProgress.levelsByCard[cardIdStr].levels.push({
+              levelNumber: levelNum,
+              score: cardScore,
+              maxScore: cardMaxScore,
+              correctAnswers: cardCorrect,
+              totalQuestions: cardTotal,
+              percentageScore: card.cardPercentageScore || (cardMaxScore > 0 ? Math.round((cardScore / cardMaxScore) * 100) : 0),
+              completedAt: levelStats.completedAt
+            });
+            txProgress.levelsByCard[cardIdStr].totalScore += cardScore;
+            txProgress.levelsByCard[cardIdStr].maxScore += cardMaxScore;
+            txProgress.levelsByCard[cardIdStr].correctAnswers += cardCorrect;
+            txProgress.levelsByCard[cardIdStr].totalQuestions += cardTotal;
           });
-          pkgProgress.levelsByCard[cardId].totalScore += progress.totalScore;
-          pkgProgress.levelsByCard[cardId].maxScore += progress.maxScore;
-          pkgProgress.levelsByCard[cardId].correctAnswers += progress.correctAnswers;
-          pkgProgress.levelsByCard[cardId].totalQuestions += progress.totalQuestions;
-          pkgProgress.totalLevelsPlayed += 1;
-          pkgProgress.totalScore += progress.totalScore;
-          pkgProgress.maxScore += progress.maxScore;
-          pkgProgress.correctAnswers += progress.correctAnswers;
-          pkgProgress.totalQuestions += progress.totalQuestions;
+          
+          txProgress.totalLevelsPlayed += 1;
+          txProgress.totalScore += levelStats.totalScore || 0;
+          txProgress.maxScore += levelStats.maxScore || 0;
+          txProgress.correctAnswers += levelStats.correctAnswers || 0;
+          txProgress.totalQuestions += levelStats.totalQuestions || 0;
+        }
+        
+        // Also group by package (for free trials or progress without transaction)
+        if (packageId) {
+          if (!progressByPackage[packageId]) {
+            progressByPackage[packageId] = {
+              packageId: packageId,
+              packageName: gameProgressDoc.packageId?.name || 'Unknown',
+              levelsByCard: {},
+              totalLevelsPlayed: 0,
+              totalScore: 0,
+              maxScore: 0,
+              correctAnswers: 0,
+              totalQuestions: 0
+            };
+          }
+          const pkgProgress = progressByPackage[packageId];
+          
+          if (!transactionId) {
+            // Process each card in the level
+            levelArray.forEach(card => {
+              const cardIdStr = card.cardId?._id?.toString() || card.cardId?.toString();
+              if (!cardIdStr) return;
+              
+              if (!pkgProgress.levelsByCard[cardIdStr]) {
+                const cardTitle = card.cardTitle || card.cardId?.title || 'Unknown Card';
+                
+                pkgProgress.levelsByCard[cardIdStr] = {
+                  cardId: cardIdStr,
+                  cardTitle: cardTitle,
+                  levels: [],
+                  totalScore: 0,
+                  maxScore: 0,
+                  correctAnswers: 0,
+                  totalQuestions: 0
+                };
+              }
+              
+              // Use card stats directly
+              const cardScore = card.cardTotalScore || 0;
+              const cardCorrect = card.cardCorrectAnswers || 0;
+              const cardTotal = card.cardTotalQuestions || 0;
+              const cardMaxScore = card.cardMaxScore || (cardTotal * 4);
+              
+              pkgProgress.levelsByCard[cardIdStr].levels.push({
+                levelNumber: levelNum,
+                score: cardScore,
+                maxScore: cardMaxScore,
+                correctAnswers: cardCorrect,
+                totalQuestions: cardTotal,
+                percentageScore: card.cardPercentageScore || (cardMaxScore > 0 ? Math.round((cardScore / cardMaxScore) * 100) : 0),
+                completedAt: levelStats.completedAt
+              });
+              pkgProgress.levelsByCard[cardIdStr].totalScore += cardScore;
+              pkgProgress.levelsByCard[cardIdStr].maxScore += cardMaxScore;
+              pkgProgress.levelsByCard[cardIdStr].correctAnswers += cardCorrect;
+              pkgProgress.levelsByCard[cardIdStr].totalQuestions += cardTotal;
+            });
+            
+            pkgProgress.totalLevelsPlayed += 1;
+            pkgProgress.totalScore += levelStats.totalScore || 0;
+            pkgProgress.maxScore += levelStats.maxScore || 0;
+            pkgProgress.correctAnswers += levelStats.correctAnswers || 0;
+            pkgProgress.totalQuestions += levelStats.totalQuestions || 0;
+          }
         }
       }
-    });
+    }
 
     // Calculate overall game progress (all memberships combined)
-    const totalLevelsPlayed = gameProgress.length;
     const levelsByCard = {};
-    gameProgress.forEach((progress) => {
-      const cardId = progress.cardId?._id?.toString() || progress.cardId?.toString();
-      if (!levelsByCard[cardId]) {
-        levelsByCard[cardId] = {
-          cardId: cardId,
-          cardTitle: progress.cardId?.title || 'Unknown Card',
-          levels: [],
-          totalScore: 0,
-          maxScore: 0,
-          correctAnswers: 0,
-          totalQuestions: 0
-        };
+    let totalLevelsPlayed = 0;
+    
+    if (gameProgressDoc) {
+      for (let levelNum of [1, 2, 3]) {
+        const levelArray = gameProgressDoc[`level${levelNum}`] || [];
+        const levelStats = gameProgressDoc[`level${levelNum}Stats`] || {};
+        
+        if (levelArray.length === 0) continue;
+        totalLevelsPlayed += 1;
+        
+        // levelArray now contains cards, not questions
+        // Process each card in the level
+        levelArray.forEach(card => {
+          const cardIdStr = card.cardId?._id?.toString() || card.cardId?.toString();
+          if (!cardIdStr) return;
+          
+          if (!levelsByCard[cardIdStr]) {
+            const cardTitle = card.cardTitle || card.cardId?.title || 'Unknown Card';
+            
+            levelsByCard[cardIdStr] = {
+              cardId: cardIdStr,
+              cardTitle: cardTitle,
+              levels: [],
+              totalScore: 0,
+              maxScore: 0,
+              correctAnswers: 0,
+              totalQuestions: 0
+            };
+          }
+          
+          // Use card stats directly
+          const cardScore = card.cardTotalScore || 0;
+          const cardCorrect = card.cardCorrectAnswers || 0;
+          const cardTotal = card.cardTotalQuestions || 0;
+          const cardMaxScore = card.cardMaxScore || (cardTotal * 4);
+          
+          levelsByCard[cardIdStr].levels.push({
+            levelNumber: levelNum,
+            score: cardScore,
+            maxScore: cardMaxScore,
+            correctAnswers: cardCorrect,
+            totalQuestions: cardTotal,
+            percentageScore: card.cardPercentageScore || (cardMaxScore > 0 ? Math.round((cardScore / cardMaxScore) * 100) : 0),
+            completedAt: levelStats.completedAt
+          });
+          levelsByCard[cardIdStr].totalScore += cardScore;
+          levelsByCard[cardIdStr].maxScore += cardMaxScore;
+          levelsByCard[cardIdStr].correctAnswers += cardCorrect;
+          levelsByCard[cardIdStr].totalQuestions += cardTotal;
+        });
       }
-      levelsByCard[cardId].levels.push({
-        levelNumber: progress.levelNumber,
-        score: progress.totalScore,
-        maxScore: progress.maxScore,
-        correctAnswers: progress.correctAnswers,
-        totalQuestions: progress.totalQuestions,
-        percentageScore: progress.percentageScore,
-        completedAt: progress.completedAt
-      });
-      levelsByCard[cardId].totalScore += progress.totalScore;
-      levelsByCard[cardId].maxScore += progress.maxScore;
-      levelsByCard[cardId].correctAnswers += progress.correctAnswers;
-      levelsByCard[cardId].totalQuestions += progress.totalQuestions;
-    });
+    }
 
     // Calculate overall game progress percentage
     const overallGameScore = Object.values(levelsByCard).reduce((sum, card) => sum + card.totalScore, 0);

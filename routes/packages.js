@@ -171,10 +171,13 @@ router.put('/:id/unarchive', authenticateToken, checkPermission('packages'), asy
 
 router.delete('/:id', authenticateToken, checkPermission('packages'), async (req, res) => {
   try {
-    const package = await Package.findByIdAndDelete(req.params.id);
+    const package = await Package.findById(req.params.id);
     if (!package) {
       return res.status(404).json({ error: 'Package not found' });
     }
+
+    // Allow deletion of predefined packages (admin can delete them)
+    await Package.findByIdAndDelete(req.params.id);
     res.json({ message: 'Package permanently deleted' });
   } catch (error) {
     console.error('Error deleting package:', error);
@@ -380,20 +383,27 @@ router.post('/:id/purchase', authenticateToken, async (req, res) => {
       referrals: [],
       contractPeriod: {
         startDate: new Date(),
-        endDate: package.expiryDate
-          ? new Date(package.expiryDate)
-          : (package.pricing.billingType === 'subscription'
-            ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000) // 1 year for subscription
-            : null), // One-time purchases don't expire if no expiryDate set
+        endDate: (() => {
+          // Calculate expiry date from expiryTime and expiryTimeUnit
+          if (package.expiryTime && package.expiryTimeUnit) {
+            const expiryDate = new Date();
+            if (package.expiryTimeUnit === 'months') {
+              expiryDate.setMonth(expiryDate.getMonth() + package.expiryTime);
+            } else if (package.expiryTimeUnit === 'years') {
+              expiryDate.setFullYear(expiryDate.getFullYear() + package.expiryTime);
+            }
+            return expiryDate;
+          }
+          // If no expiry time set, use subscription default (1 year) or null for one-time
+          return package.pricing.billingType === 'subscription'
+            ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
+            : null;
+        })(),
       },
     });
 
-    // Determine membership end date - use package expiryDate if available, otherwise use contractPeriod.endDate
+    // Determine membership end date - use calculated expiry date
     let membershipEndDate = transaction.contractPeriod.endDate;
-    if (package.expiryDate) {
-      // If package has expiryDate, use it
-      membershipEndDate = new Date(package.expiryDate);
-    }
 
     // Add membership to user
     user.memberships.push({

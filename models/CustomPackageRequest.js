@@ -6,12 +6,33 @@ const CustomPackageRequestSchema = new Schema(
     basePackageId: {
       type: Schema.Types.ObjectId,
       ref: 'Package',
-      required: true
+      required: false
     },
+    entityType: {
+      type: String,
+      enum: ['organization', 'institute'],
+      required: false
+    },
+    productId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Product'
+    },
+    productIds: [{
+      type: Schema.Types.ObjectId,
+      ref: 'Product'
+    }],
     organizationName: {
       type: String,
       required: true,
       trim: true
+    },
+    organizationId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Organization'
+    },
+    schoolId: {
+      type: Schema.Types.ObjectId,
+      ref: 'School'
     },
     contactName: {
       type: String,

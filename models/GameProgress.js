@@ -6,13 +6,11 @@ const GameProgressSchema = new Schema(
     userId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
-      required: true,
-      index: true
+      required: true
     },
     cardId: {
       type: Schema.Types.ObjectId,
       ref: 'Card',
-      required: true,
       index: true
     },
     packageId: {
@@ -41,44 +39,125 @@ const GameProgressSchema = new Schema(
       min: 1,
       max: 3
     },
-    // Level summary only (no question details)
+    cards: [{
+      cardId: {
+        type: Schema.Types.ObjectId,
+        ref: 'Card',
+        required: true
+      },
+      cardTitle: {
+        type: String
+      },
+      questions: [{
+        questionNo: {
+          type: Number,
+          required: true
+        },
+        questionId: {
+          type: String
+        },
+        questionText: {
+          type: String
+        },
+        selectedAnswer: {
+          type: String
+        },
+        correctAnswer: {
+          type: String
+        },
+        isCorrect: {
+          type: Boolean,
+          default: false
+        },
+        points: {
+          type: Number,
+          default: 0
+        },
+        answeredAt: {
+          type: Date,
+          default: Date.now
+        }
+      }],
+      cardTotalScore: {
+        type: Number,
+        default: 0
+      },
+      cardMaxScore: {
+        type: Number,
+        default: 0
+      },
+      cardCorrectAnswers: {
+        type: Number,
+        default: 0
+      },
+      cardTotalQuestions: {
+        type: Number,
+        default: 0
+      },
+      cardPercentageScore: {
+        type: Number,
+        default: 0
+      }
+    }],
     totalScore: {
       type: Number,
-      required: true,
       default: 0
     },
     maxScore: {
       type: Number,
-      required: true
+      default: 0
     },
     correctAnswers: {
       type: Number,
-      required: true,
       default: 0
     },
     totalQuestions: {
       type: Number,
-      required: true
+      default: 0
     },
     percentageScore: {
       type: Number,
-      required: true,
       default: 0,
       min: 0,
       max: 100
     },
     completedAt: {
-      type: Date,
-      default: Date.now
+      type: Date
     }
   },
   { timestamps: true }
 );
 
-// Compound index for efficient queries
-GameProgressSchema.index({ userId: 1, cardId: 1, levelNumber: 1 });
-GameProgressSchema.index({ userId: 1, completedAt: -1 });
-GameProgressSchema.index({ cardId: 1, levelNumber: 1, totalScore: -1 }); // For leaderboard
+// One entry per user per level
+GameProgressSchema.index({ userId: 1, levelNumber: 1 }, { unique: true });
+GameProgressSchema.index({ userId: 1, updatedAt: -1 });
+GameProgressSchema.index({ userId: 1, levelNumber: 1, updatedAt: -1 });
 
-module.exports = mongoose.model('GameProgress', GameProgressSchema);
+const GameProgress = mongoose.model('GameProgress', GameProgressSchema);
+
+// Drop old unique index on userId only if it exists (migration helper)
+GameProgress.dropOldIndex = async function() {
+  try {
+    const collection = this.collection;
+    const indexes = await collection.indexes();
+    const oldIndex = indexes.find(idx => 
+      idx.name === 'userId_1' && 
+      Object.keys(idx.key).length === 1 &&
+      idx.unique === true
+    );
+    if (oldIndex) {
+      await collection.dropIndex('userId_1');
+      console.log('✅ Dropped old userId_1 unique index');
+      return true;
+    }
+  } catch (error) {
+    // Index might not exist or already dropped, ignore
+    if (error.code !== 27 && error.codeName !== 'IndexNotFound') {
+      console.log('Note: Could not drop old index:', error.message);
+    }
+  }
+  return false;
+};
+
+module.exports = GameProgress;
 

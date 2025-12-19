@@ -24,8 +24,28 @@ const UserSchema = new Schema(
     },
     role: {
       type: String,
-      enum: ['admin', 'b2c_user', 'b2b_user', 'b2e_user'],
+      enum: ['admin', 'b2c_user', 'b2b_user', 'b2e_user', 'b2b_member', 'b2e_member'],
       default: 'b2c_user'
+    },
+    organizationId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Organization'
+    },
+    schoolId: {
+      type: Schema.Types.ObjectId,
+      ref: 'School'
+    },
+    memberStatus: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected'],
+      default: null
+    },
+    memberApprovedAt: {
+      type: Date
+    },
+    memberApprovedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User'
     },
     isActive: {
       type: Boolean,

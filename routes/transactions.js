@@ -5,7 +5,10 @@ const { checkPermission } = require('../middleware/rbac');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const Organization = require('../models/Organization');
+const School = require('../models/School');
 const Package = require('../models/Package');
+const CustomPackage = require('../models/CustomPackage');
+const Product = require('../models/Product');
 
 const router = express.Router();
 
@@ -35,6 +38,202 @@ router.get('/b2c', authenticateToken, checkPermission('transactions'), async (re
   }
 });
 
+// New endpoint: Get all packages and transactions for admin's organization/school
+router.get('/admin/packages', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.userId;
+    
+    // Get admin user with organization/school info
+    const user = await User.findById(userId)
+      .populate('organizationId')
+      .populate('schoolId');
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Determine organization/school ID
+    let organizationId = null;
+    let schoolId = null;
+    
+    // Check if user is owner of organization/school
+    if (user.ownerId) {
+      const ownerOrg = await Organization.findOne({ ownerId: userId });
+      const ownerSchool = await School.findOne({ ownerId: userId });
+      if (ownerOrg) organizationId = ownerOrg._id;
+      if (ownerSchool) schoolId = ownerSchool._id;
+    }
+    
+    // Fallback to user's direct organization/school
+    if (!organizationId && user.organizationId) {
+      organizationId = typeof user.organizationId === 'object' 
+        ? user.organizationId._id 
+        : user.organizationId;
+    }
+    if (!schoolId && user.schoolId) {
+      schoolId = typeof user.schoolId === 'object' 
+        ? user.schoolId._id 
+        : user.schoolId;
+    }
+    
+    // Build query for transactions
+    const transactionQuery = {
+      type: { $in: ['b2b_contract', 'b2e_contract'] }
+    };
+    
+    if (organizationId) {
+      transactionQuery.$or = [
+        { organizationId: organizationId },
+        { userId: userId }
+      ];
+    }
+    if (schoolId) {
+      if (!transactionQuery.$or) transactionQuery.$or = [];
+      transactionQuery.$or.push({ schoolId: schoolId });
+      if (!transactionQuery.$or.some(q => q.userId === userId)) {
+        transactionQuery.$or.push({ userId: userId });
+      }
+    }
+    
+    // If no organization/school, just get user's transactions
+    if (!organizationId && !schoolId) {
+      transactionQuery.userId = userId;
+      delete transactionQuery.$or;
+    }
+    
+    // Fetch ALL transactions with COMPLETE population
+    // Don't use lean() initially to ensure populate works correctly
+    const transactions = await Transaction.find(transactionQuery)
+      .populate({
+        path: 'packageId',
+        model: 'Package'
+        // Get ALL fields - don't restrict with select
+      })
+      .populate({
+        path: 'customPackageId',
+        model: 'CustomPackage',
+        populate: {
+          path: 'basePackageId',
+          model: 'Package'
+        }
+      })
+      .populate({
+        path: 'userId',
+        model: 'User',
+        select: 'name email role schoolId organizationId _id'
+      })
+      .populate({
+        path: 'organizationId',
+        model: 'Organization'
+      })
+      .populate({
+        path: 'schoolId',
+        model: 'School'
+      })
+      .populate({
+        path: 'productId',
+        model: 'Product'
+      })
+      .populate({
+        path: 'gamePlays.userId',
+        model: 'User',
+        select: 'name email _id'
+      })
+      .populate({
+        path: 'referrals.referredUserId',
+        model: 'User',
+        select: 'name email _id'
+      })
+      .sort({ createdAt: -1 });
+    
+    // Convert to plain objects and ensure ALL fields are included
+    const enrichedTransactions = transactions.map(tx => {
+      // Convert Mongoose document to plain object
+      const txObj = tx.toObject ? tx.toObject() : tx;
+      
+      // Ensure ALL transaction fields are explicitly included
+      return {
+        _id: txObj._id,
+        id: txObj._id, // Add id field for frontend compatibility
+        type: txObj.type,
+        userId: txObj.userId,
+        organizationId: txObj.organizationId,
+        schoolId: txObj.schoolId,
+        packageId: txObj.packageId, // FULLY populated package object with ALL fields
+        packageType: txObj.packageType,
+        productId: txObj.productId,
+        customPackageId: txObj.customPackageId,
+        amount: txObj.amount,
+        currency: txObj.currency,
+        status: txObj.status,
+        providerRef: txObj.providerRef,
+        uniqueCode: txObj.uniqueCode, // Unique code for game play
+        stripePaymentIntentId: txObj.stripePaymentIntentId,
+        contractPeriod: txObj.contractPeriod || {
+          startDate: txObj.createdAt,
+          endDate: null
+        },
+        maxSeats: txObj.maxSeats,
+        usedSeats: txObj.usedSeats,
+        codeApplications: txObj.codeApplications,
+        gamePlays: txObj.gamePlays || [], // Array with populated userId
+        referrals: txObj.referrals || [], // Array with populated referredUserId
+        createdAt: txObj.createdAt,
+        updatedAt: txObj.updatedAt,
+        __v: txObj.__v
+      };
+    });
+    
+    // Get organization/school data if exists
+    let organization = null;
+    let school = null;
+    
+    if (organizationId) {
+      organization = await Organization.findById(organizationId)
+        .populate('transactionIds')
+        .populate('members')
+        .lean();
+    }
+    
+    if (schoolId) {
+      school = await School.findById(schoolId)
+        .populate('transactionIds')
+        .populate('students')
+        .populate({
+          path: 'customPackages',
+          populate: {
+            path: 'basePackageId',
+            model: 'Package'
+          }
+        })
+        .lean();
+    }
+    
+    // Custom packages are now only returned via transactions (after purchase)
+    // Only purchased custom packages (with transactions) should appear on dashboard
+    // Return complete data
+    res.json({
+      success: true,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        organizationId: organizationId,
+        schoolId: schoolId
+      },
+      organization: organization,
+      school: school,
+      transactions: enrichedTransactions, // ALL transaction data with FULL population (includes custom packages if purchased)
+      customPackages: [], // Empty - custom packages only show via transactions
+      count: enrichedTransactions.length
+    });
+  } catch (error) {
+    console.error('Error fetching admin packages:', error);
+    res.status(500).json({ error: 'Server error', details: error.message });
+  }
+});
+
 router.get('/b2b-b2e', authenticateToken, checkPermission('transactions'), async (req, res) => {
   try {
     const { organizationId, status } = req.query;
@@ -46,10 +245,58 @@ router.get('/b2b-b2e', authenticateToken, checkPermission('transactions'), async
     if (status) query.status = status;
 
     const transactions = await Transaction.find(query)
-      .populate('organizationId', 'name segment')
-      .populate('customPackageId')
-      .sort({ createdAt: -1 });
-    res.json(transactions);
+      .populate({
+        path: 'organizationId',
+        model: 'Organization',
+        select: '-__v'
+      })
+      .populate({
+        path: 'schoolId',
+        model: 'School',
+        select: '-__v'
+      })
+      .populate({
+        path: 'packageId',
+        model: 'Package',
+        // Get ALL fields from Package: name, description, type, packageType, category, 
+        // pricing, targetAudiences, visibility, status, maxSeats, expiryDate, includedCardIds
+        select: 'name description type packageType category pricing targetAudiences visibility status maxSeats expiryDate includedCardIds createdAt updatedAt'
+      })
+      .populate({
+        path: 'customPackageId',
+        model: 'CustomPackage',
+        select: '-__v'
+      })
+      .populate({
+        path: 'userId',
+        model: 'User',
+        select: 'name email role schoolId organizationId _id'
+      })
+      .populate({
+        path: 'productId',
+        model: 'Product',
+        select: '-__v'
+      })
+      .populate({
+        path: 'gamePlays.userId',
+        model: 'User',
+        select: 'name email _id'
+      })
+      .populate({
+        path: 'referrals.referredUserId',
+        model: 'User',
+        select: 'name email _id'
+      })
+      .sort({ createdAt: -1 })
+      .lean();
+    
+    // Ensure all transaction fields are included and add id field
+    const enrichedTransactions = transactions.map(tx => ({
+      ...tx,
+      id: tx._id // Add id field for frontend compatibility
+    }));
+    
+    res.json(enrichedTransactions);
   } catch (error) {
     console.error('Error fetching B2B/B2E contracts:', error);
     res.status(500).json({ error: 'Server error' });
@@ -70,10 +317,13 @@ router.get('/all', authenticateToken, checkPermission('transactions'), async (re
     }
 
     const transactions = await Transaction.find(query)
-      .populate('userId', 'name email')
-      .populate('packageId', 'name')
-      .populate('organizationId', 'name segment')
-      .populate('customPackageId')
+      .populate('userId') // Populate ALL fields from User
+      .populate('packageId') // Populate ALL fields from Package table
+      .populate('customPackageId') // Populate ALL fields from CustomPackage
+      .populate('organizationId') // Populate ALL fields from Organization
+      .populate('schoolId') // Populate ALL fields from School
+      .populate('productId') // Populate ALL fields from Product
+      .populate('gamePlays.userId') // Populate ALL fields from User in gamePlays
       .sort({ createdAt: -1 });
     res.json(transactions);
   } catch (error) {
@@ -195,19 +445,89 @@ router.get('/:id', authenticateToken, async (req, res) => {
     }
 
     const transaction = await Transaction.findById(id)
-      .populate('packageId', 'name')
-      .populate('userId', 'name email');
+      .populate({
+        path: 'packageId',
+        model: 'Package'
+        // Get ALL fields - don't restrict with select
+      })
+      .populate({
+        path: 'customPackageId',
+        model: 'CustomPackage'
+      })
+      .populate({
+        path: 'userId',
+        model: 'User',
+        select: 'name email role schoolId organizationId _id'
+      })
+      .populate({
+        path: 'organizationId',
+        model: 'Organization'
+      })
+      .populate({
+        path: 'schoolId',
+        model: 'School'
+      })
+      .populate({
+        path: 'productId',
+        model: 'Product'
+      })
+      .populate({
+        path: 'gamePlays.userId',
+        model: 'User',
+        select: 'name email _id'
+      })
+      .populate({
+        path: 'referrals.referredUserId',
+        model: 'User',
+        select: 'name email _id'
+      });
 
     if (!transaction) {
       return res.status(404).json({ error: 'Transaction not found' });
     }
 
+    // Convert to plain object and ensure ALL fields are included
+    const txObj = transaction.toObject ? transaction.toObject() : transaction;
+    
+    // Build complete transaction object with ALL fields
+    const completeTransaction = {
+      _id: txObj._id,
+      id: txObj._id, // Add id field for frontend compatibility
+      type: txObj.type,
+      userId: txObj.userId,
+      organizationId: txObj.organizationId,
+      schoolId: txObj.schoolId,
+      packageId: txObj.packageId, // FULLY populated package object with ALL fields
+      packageType: txObj.packageType,
+      productId: txObj.productId,
+      customPackageId: txObj.customPackageId,
+      amount: txObj.amount,
+      currency: txObj.currency,
+      status: txObj.status,
+      providerRef: txObj.providerRef,
+      uniqueCode: txObj.uniqueCode, // Unique code for game play
+      stripePaymentIntentId: txObj.stripePaymentIntentId,
+      contractPeriod: txObj.contractPeriod || {
+        startDate: txObj.createdAt,
+        endDate: null
+      },
+      maxSeats: txObj.maxSeats,
+      usedSeats: txObj.usedSeats,
+      codeApplications: txObj.codeApplications,
+      gamePlays: txObj.gamePlays || [],
+      referrals: txObj.referrals || [],
+      createdAt: txObj.createdAt,
+      updatedAt: txObj.updatedAt,
+      __v: txObj.__v
+    };
+
     // Check if user owns this transaction
-    if (transaction.userId && transaction.userId._id.toString() !== req.userId) {
+    if (completeTransaction.userId && completeTransaction.userId._id && completeTransaction.userId._id.toString() !== req.userId) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    res.json(transaction);
+    // Return complete transaction with all populated data
+    res.json(completeTransaction);
   } catch (error) {
     console.error('Error fetching transaction:', error);
     res.status(500).json({ error: 'Server error' });

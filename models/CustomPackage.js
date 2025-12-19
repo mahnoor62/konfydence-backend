@@ -5,14 +5,25 @@ const CustomPackageSchema = new Schema(
   {
     organizationId: {
       type: Schema.Types.ObjectId,
-      ref: 'Organization',
-      required: true
+      ref: 'Organization'
+    },
+    schoolId: {
+      type: Schema.Types.ObjectId,
+      ref: 'School'
+    },
+    entityType: {
+      type: String,
+      enum: ['organization', 'institute']
     },
     basePackageId: {
       type: Schema.Types.ObjectId,
       ref: 'Package',
-      required: true
+      required: false
     },
+    productIds: [{
+      type: Schema.Types.ObjectId,
+      ref: 'Product'
+    }],
     name: {
       type: String,
       trim: true
@@ -21,14 +32,6 @@ const CustomPackageSchema = new Schema(
       type: String
     },
     addedCardIds: [{
-      type: Schema.Types.ObjectId,
-      ref: 'Card'
-    }],
-    removedCardIds: [{
-      type: Schema.Types.ObjectId,
-      ref: 'Card'
-    }],
-    effectiveCardIds: [{
       type: Schema.Types.ObjectId,
       ref: 'Card'
     }],
@@ -62,13 +65,20 @@ const CustomPackageSchema = new Schema(
       },
       endDate: {
         type: Date,
-        required: true
+        required: false
       },
       status: {
         type: String,
         enum: ['active', 'expired', 'pending'],
         default: 'pending'
       }
+    },
+    expiryTime: {
+      type: Number
+    },
+    expiryTimeUnit: {
+      type: String,
+      enum: ['months', 'years']
     },
     assignedCohorts: [{
       type: String,
@@ -87,22 +97,6 @@ const CustomPackageSchema = new Schema(
   { timestamps: true }
 );
 
-CustomPackageSchema.pre('save', async function() {
-  if (this.isModified('basePackageId') || this.isModified('addedCardIds') || this.isModified('removedCardIds')) {
-    const Package = mongoose.model('Package');
-    const basePackage = await Package.findById(this.basePackageId);
-    if (basePackage) {
-      const baseCardIds = basePackage.includedCardIds.map(id => id.toString());
-      const addedCardIds = this.addedCardIds.map(id => id.toString());
-      const removedCardIds = this.removedCardIds.map(id => id.toString());
-      
-      const effective = [...new Set([...baseCardIds, ...addedCardIds])]
-        .filter(id => !removedCardIds.includes(id));
-      
-      this.effectiveCardIds = effective;
-    }
-  }
-});
 
 module.exports = mongoose.model('CustomPackage', CustomPackageSchema);
 
