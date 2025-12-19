@@ -30,15 +30,22 @@ router.post(
           const segment = req.body.topic === 'b2b_demo' ? 'B2B' : 'B2E';
           const source = req.body.topic === 'b2b_demo' ? 'b2b_form' : 'b2e_form';
           
-          await Lead.create({
+          const leadData = {
             name: req.body.name,
             email: req.body.email,
             phone: req.body.phone || '',
             organizationName: req.body.company || '',
             segment: segment,
             source: source,
-            status: 'new'
-          });
+            status: 'new',
+            engagementCount: 0, // Start with 0, will be warm if demo requested
+            demoRequested: req.body.topic === 'b2b_demo' // Mark as demo requested if B2B demo
+          };
+          
+          const lead = await Lead.create(leadData);
+          // Auto-calculate status (will be warm if demoRequested, otherwise new)
+          lead.status = lead.calculateStatus();
+          await lead.save();
         } catch (unifiedError) {
           console.error('Error creating unified lead from contact:', unifiedError);
           // Don't fail the request if unified lead creation fails
@@ -46,15 +53,21 @@ router.post(
       } else {
         // For other contact topics, create as 'other' segment
         try {
-          await Lead.create({
+          const leadData = {
             name: req.body.name,
             email: req.body.email,
             phone: req.body.phone || '',
             organizationName: req.body.company || '',
             segment: 'other',
             source: 'contact_form',
-            status: 'new'
-          });
+            status: 'new',
+            engagementCount: 0 // Start as new lead
+          };
+          
+          const lead = await Lead.create(leadData);
+          // Auto-calculate status (will be new for general contact)
+          lead.status = lead.calculateStatus();
+          await lead.save();
         } catch (unifiedError) {
           console.error('Error creating unified lead from contact:', unifiedError);
           // Don't fail the request if unified lead creation fails

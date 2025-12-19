@@ -513,6 +513,26 @@ router.post('/start-game-play', authenticateToken, async (req, res) => {
 
     await freeTrial.save();
 
+    // Update linked lead if trial is completed
+    if (freeTrial.status === 'completed') {
+      try {
+        const Lead = require('../models/Lead');
+        const linkedLead = await Lead.findOne({ linkedTrialIds: freeTrial._id });
+        if (linkedLead) {
+          linkedLead.demoCompleted = true;
+          linkedLead.demoRequested = true;
+          linkedLead.engagementCount = (linkedLead.engagementCount || 0) + 1;
+          linkedLead.lastContactedAt = new Date();
+          // Auto-calculate status (demo completed = hot lead)
+          linkedLead.status = linkedLead.calculateStatus();
+          await linkedLead.save();
+        }
+      } catch (leadError) {
+        console.error('Error updating linked lead:', leadError);
+        // Don't fail the request if lead update fails
+      }
+    }
+
     // Update organization seatUsage if free trial belongs to one
     if (freeTrial.organizationId) {
       try {
