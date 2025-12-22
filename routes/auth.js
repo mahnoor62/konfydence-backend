@@ -454,9 +454,22 @@ router.post(
             });
           }
           
-          // Link organization to user
-          user.organizationId = organization._id;
-          await user.save();
+          // Link organization to user - Use findByIdAndUpdate to ensure it's saved properly
+          await User.findByIdAndUpdate(user._id, {
+            organizationId: organization._id
+          }, { new: true });
+          
+          // Refresh user object to include organizationId
+          const updatedUser = await User.findById(user._id);
+          if (updatedUser) {
+            Object.assign(user, updatedUser);
+          }
+          
+          console.log('✅ Organization linked to user:', {
+            userId: user._id.toString(),
+            organizationId: organization._id.toString(),
+            userOrganizationId: user.organizationId?.toString()
+          });
         } else if (userType === 'b2e') {
           // Generate unique code before creating
           let uniqueCode;
@@ -525,9 +538,22 @@ router.post(
             });
           }
           
-          // Link school to user
-          user.schoolId = school._id;
-          await user.save();
+          // Link school to user - Use findByIdAndUpdate to ensure it's saved properly
+          await User.findByIdAndUpdate(user._id, {
+            schoolId: school._id
+          }, { new: true });
+          
+          // Refresh user object to include schoolId
+          const updatedUser = await User.findById(user._id);
+          if (updatedUser) {
+            Object.assign(user, updatedUser);
+          }
+          
+          console.log('✅ School linked to user:', {
+            userId: user._id.toString(),
+            schoolId: school._id.toString(),
+            userSchoolId: user.schoolId?.toString()
+          });
         }
       } catch (orgError) {
         // If organization/school creation fails, delete the user
@@ -727,15 +753,44 @@ router.post(
         } : null
       };
 
+      // Refresh user from database to ensure we have the latest data including schoolId/organizationId
+      const refreshedUser = await User.findById(user._id);
+      if (!refreshedUser) {
+        return res.status(500).json({ 
+          error: 'Failed to retrieve user data. Please try logging in.',
+          errorCode: 'USER_RETRIEVAL_FAILED'
+        });
+      }
+      
+      // Update response with refreshed user data
+      response.user = {
+        id: refreshedUser._id,
+        email: refreshedUser.email,
+        name: refreshedUser.name,
+        role: refreshedUser.role,
+        organizationId: refreshedUser.organizationId || null,
+        schoolId: refreshedUser.schoolId || null,
+        isEmailVerified: refreshedUser.isEmailVerified
+      };
+      
       // Log email status
       if (!emailSent) {
         console.warn('⚠️ User registered but email not sent:', {
-          userId: user._id,
-          email: user.email,
+          userId: refreshedUser._id,
+          email: refreshedUser.email,
           error: emailError,
           verificationToken: emailVerificationToken
         });
       }
+      
+      // Log final user data for debugging
+      console.log('✅ Registration completed:', {
+        userId: refreshedUser._id.toString(),
+        email: refreshedUser.email,
+        role: refreshedUser.role,
+        organizationId: refreshedUser.organizationId?.toString() || null,
+        schoolId: refreshedUser.schoolId?.toString() || null
+      });
 
       res.status(201).json(response);
     } catch (error) {
