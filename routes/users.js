@@ -408,19 +408,7 @@ router.delete('/:id/membership', authenticateToken, async (req, res) => {
       }
     }
 
-    // Remove member from organization/school
-    member.organizationId = null;
-    member.schoolId = null;
-    member.memberStatus = 'rejected';
-    await member.save();
-
-    // Delete OrgUser record if exists
-    await OrgUser.deleteMany({ userId: member._id });
-
-    // Note: Game progress is NOT deleted when member is removed
-    // This allows the member to retain their progress if they rejoin
-
-    // Send termination email
+    // Send termination email before deleting user
     try {
       const { sendMembershipTerminationEmail } = require('../utils/emailService');
       await sendMembershipTerminationEmail(member, organizationName, schoolName);
@@ -429,7 +417,20 @@ router.delete('/:id/membership', authenticateToken, async (req, res) => {
       // Don't fail the request if email fails
     }
 
-    res.json({ message: 'Member membership terminated successfully. The member has been notified via email.' });
+    // Delete related transactions
+    await Transaction.deleteMany({ userId: member._id });
+
+    // Delete OrgUser record if exists
+    await OrgUser.deleteMany({ userId: member._id });
+
+    // Delete member requests if exists
+    const MemberRequest = require('../models/MemberRequest');
+    await MemberRequest.deleteMany({ user: member._id });
+
+    // Delete the user from database
+    await User.findByIdAndDelete(member._id);
+
+    res.json({ message: 'Member deleted successfully from database. The member has been notified via email.' });
   } catch (error) {
     console.error('Error terminating membership:', error);
     res.status(500).json({ error: 'Server error' });
