@@ -232,6 +232,7 @@ router.post('/use-code', authenticateToken, async (req, res) => {
     }
 
     // Check if user is a member of the organization (if code belongs to organization)
+    // Note: Individual free trials (no organizationId) can be used by anyone
     if (freeTrial.organizationId) {
       const User = require('../models/User');
       const Organization = require('../models/Organization');
@@ -551,7 +552,44 @@ router.post('/start-game-play', authenticateToken, async (req, res) => {
       });
     }
 
-    // Increment seat count when user actually starts playing
+    // CRITICAL: Check if cards are available before incrementing seats
+    // Only increment seats if cards are actually available for the product/package
+    const Product = require('../models/Product');
+    const Package = require('../models/Package');
+    const Card = require('../models/Card');
+    let cardsAvailable = false;
+
+    if (freeTrial.productId) {
+      // Check if product has cards in any level
+      const product = await Product.findById(freeTrial.productId).select('level1 level2 level3');
+      if (product) {
+        const hasLevel1Cards = product.level1 && product.level1.length > 0;
+        const hasLevel2Cards = product.level2 && product.level2.length > 0;
+        const hasLevel3Cards = product.level3 && product.level3.length > 0;
+        cardsAvailable = hasLevel1Cards || hasLevel2Cards || hasLevel3Cards;
+      }
+    } else if (freeTrial.packageId) {
+      // Check if package has cards with questions
+      const packageDoc = await Package.findById(freeTrial.packageId).select('includedCardIds');
+      if (packageDoc && packageDoc.includedCardIds && packageDoc.includedCardIds.length > 0) {
+        // Check if package has cards with questions
+        const cardsWithQuestions = await Card.find({ 
+          _id: { $in: packageDoc.includedCardIds },
+          'question.description': { $exists: true, $ne: '' }
+        });
+        cardsAvailable = cardsWithQuestions && cardsWithQuestions.length > 0;
+      }
+    }
+
+    // If no cards are available, don't increment seats and return error
+    if (!cardsAvailable) {
+      return res.status(400).json({ 
+        error: 'No cards are available for this product/package. Please contact support to add cards before playing the game.',
+        noCardsAvailable: true
+      });
+    }
+
+    // Increment seat count when user actually starts playing (only if cards are available)
     freeTrial.usedSeats += 1;
     
     // Track game play

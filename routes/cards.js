@@ -110,6 +110,7 @@ router.get('/public/game', async (req, res) => {
       query._id = { $in: cardIds };
     }
     
+    // Don't filter soft deleted cards for game play - users who purchased should still see them
     // Fetch cards (filtered by product level or package)
     const cardsMap = {};
     const fetchedCards = await Card.find(query);
@@ -175,6 +176,9 @@ router.get('/', authenticateToken, checkPermission('cards'), async (req, res) =>
       ];
     }
 
+    // Filter out soft deleted cards for admin panel
+    query.isDeleted = { $ne: true };
+
     const cards = await Card.find(query).sort({ updatedAt: -1 });
     res.json(cards);
   } catch (error) {
@@ -185,7 +189,7 @@ router.get('/', authenticateToken, checkPermission('cards'), async (req, res) =>
 
 router.get('/:id', authenticateToken, checkPermission('cards'), async (req, res) => {
   try {
-    const card = await Card.findById(req.params.id);
+    const card = await Card.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
     if (!card) {
       return res.status(404).json({ error: 'Card not found' });
     }
@@ -477,11 +481,128 @@ router.delete('/:id/question/attachments/:attachmentId', authenticateToken, chec
 
 router.delete('/:id', authenticateToken, checkPermission('cards'), async (req, res) => {
   try {
-    const card = await Card.findByIdAndDelete(req.params.id);
+    const cardId = req.params.id;
+    const card = await Card.findById(cardId);
+    
     if (!card) {
       return res.status(404).json({ error: 'Card not found' });
     }
-    res.json({ message: 'Card deleted successfully' });
+
+    // Check if card is already soft deleted
+    if (card.isDeleted) {
+      return res.status(400).json({ error: 'Card is already deleted' });
+    }
+
+    // Check if card is used in any purchased products/packages
+    const Product = require('../models/Product');
+    const Package = require('../models/Package');
+    const Transaction = require('../models/Transaction');
+    const FreeTrial = require('../models/FreeTrial');
+
+    let isCardPurchased = false;
+    let purchaseDetails = [];
+
+    // Check if card is in any product's levels and that product has paid transactions
+    const productsWithCard = await Product.find({
+      $or: [
+        { level1: cardId },
+        { level2: cardId },
+        { level3: cardId }
+      ]
+    }).select('_id name level1 level2 level3');
+
+    if (productsWithCard.length > 0) {
+      // Check if any of these products have paid transactions
+      for (const product of productsWithCard) {
+        const hasPaidTransactions = await Transaction.exists({
+          productId: product._id,
+          status: 'paid'
+        });
+
+        if (hasPaidTransactions) {
+          isCardPurchased = true;
+          purchaseDetails.push({
+            type: 'product',
+            id: product._id,
+            name: product.name
+          });
+        }
+      }
+    }
+
+    // Check if card is in any package's includedCardIds and that package has paid transactions or free trials
+    const packagesWithCard = await Package.find({
+      includedCardIds: cardId
+    }).select('_id name includedCardIds');
+
+    if (packagesWithCard.length > 0) {
+      // Check if any of these packages have paid transactions or free trials
+      for (const packageDoc of packagesWithCard) {
+        const hasPaidTransactions = await Transaction.exists({
+          packageId: packageDoc._id,
+          status: 'paid'
+        });
+
+        const hasFreeTrials = await FreeTrial.exists({
+          packageId: packageDoc._id,
+          status: 'active'
+        });
+
+        if (hasPaidTransactions || hasFreeTrials) {
+          isCardPurchased = true;
+          purchaseDetails.push({
+            type: 'package',
+            id: packageDoc._id,
+            name: packageDoc.name
+          });
+        }
+      }
+    }
+
+    // If card is purchased, perform soft delete
+    if (isCardPurchased) {
+      card.isDeleted = true;
+      card.deletedAt = new Date();
+      await card.save();
+
+      return res.json({ 
+        message: 'Card has been soft deleted because it is associated with purchased products/packages. It will remain in the database but will not be visible in admin panel.',
+        softDeleted: true,
+        purchaseDetails: purchaseDetails
+      });
+    }
+
+    // If card is not purchased, perform hard delete
+    await Card.findByIdAndDelete(cardId);
+
+    // Remove card from products' level arrays
+    await Product.updateMany(
+      {
+        $or: [
+          { level1: cardId },
+          { level2: cardId },
+          { level3: cardId }
+        ]
+      },
+      {
+        $pull: {
+          level1: cardId,
+          level2: cardId,
+          level3: cardId
+        }
+      }
+    );
+
+    // Remove card from packages' includedCardIds
+    await Package.updateMany(
+      { includedCardIds: cardId },
+      { $pull: { includedCardIds: cardId } }
+    );
+
+    res.json({ 
+      message: 'Card deleted successfully',
+      softDeleted: false
+    });
   } catch (error) {
     console.error('Error deleting card:', error);
     res.status(500).json({ error: 'Server error' });

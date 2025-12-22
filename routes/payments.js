@@ -1651,10 +1651,20 @@ router.get('/check-purchase-code/:code', async (req, res) => {
     // Note: This endpoint is public, so we can't check user here, but we'll check in use-code and start-game-play
     const userId = req.query.userId || req.userId; // Try to get from query or auth if available
     let hasUserPlayed = false;
+    let isOwner = false;
+    
     if (userId) {
       hasUserPlayed = transaction.gamePlays?.some(
         (play) => play.userId && play.userId.toString() === userId.toString()
       );
+      
+      // Check if this is an individual purchase and user owns it
+      if (!transaction.organizationId && !transaction.schoolId) {
+        const transactionUserId = transaction.userId?._id || transaction.userId;
+        if (transactionUserId && transactionUserId.toString() === userId.toString()) {
+          isOwner = true;
+        }
+      }
     }
 
     // Get package type (prefer packageType, fallback to type)
@@ -1674,7 +1684,11 @@ router.get('/check-purchase-code/:code', async (req, res) => {
         gamePlays: transaction.gamePlays?.length || 0,
         endDate: transaction.contractPeriod?.endDate,
         seatsAvailable: remainingSeats > 0,
-        hasUserPlayed: hasUserPlayed // Indicate if user has already played
+        hasUserPlayed: hasUserPlayed, // Indicate if user has already played
+        isOwner: isOwner, // Indicate if user owns this code (for individual purchases)
+        userId: transaction.userId?._id || transaction.userId || null, // Include userId for ownership check
+        organizationId: transaction.organizationId?._id || transaction.organizationId || null, // Include organizationId
+        schoolId: transaction.schoolId?._id || transaction.schoolId || null // Include schoolId
       },
     });
   } catch (error) {
@@ -1733,6 +1747,17 @@ router.post('/use-purchase-code', authenticateToken, async (req, res) => {
     if (transaction.contractPeriod?.endDate) {
       if (isTransactionExpired(transaction.contractPeriod.endDate)) {
         return res.status(400).json({ error: 'This purchase code has expired' });
+      }
+    }
+
+    // Check if this is an individual purchase (no organization/school)
+    // Individual users can only use codes they purchased themselves
+    if (!transaction.organizationId && !transaction.schoolId) {
+      const transactionUserId = transaction.userId?._id || transaction.userId;
+      if (transactionUserId && transactionUserId.toString() !== req.userId.toString()) {
+        return res.status(403).json({ 
+          error: 'This code belongs to another user. Only the user who purchased this code can use it to play the game.' 
+        });
       }
     }
 
@@ -1977,7 +2002,44 @@ router.post('/start-purchase-game-play', authenticateToken, async (req, res) => 
       });
     }
 
-    // Increment seat count when user actually starts playing
+    // CRITICAL: Check if cards are available before incrementing seats
+    // Only increment seats if cards are actually available for the product/package
+    const Product = require('../models/Product');
+    const Package = require('../models/Package');
+    const Card = require('../models/Card');
+    let cardsAvailable = false;
+
+    if (transaction.productId) {
+      // Check if product has cards in any level
+      const product = await Product.findById(transaction.productId).select('level1 level2 level3');
+      if (product) {
+        const hasLevel1Cards = product.level1 && product.level1.length > 0;
+        const hasLevel2Cards = product.level2 && product.level2.length > 0;
+        const hasLevel3Cards = product.level3 && product.level3.length > 0;
+        cardsAvailable = hasLevel1Cards || hasLevel2Cards || hasLevel3Cards;
+      }
+    } else if (transaction.packageId) {
+      // Check if package has cards with questions
+      const packageDoc = await Package.findById(transaction.packageId).select('includedCardIds');
+      if (packageDoc && packageDoc.includedCardIds && packageDoc.includedCardIds.length > 0) {
+        // Check if package has cards with questions
+        const cardsWithQuestions = await Card.find({ 
+          _id: { $in: packageDoc.includedCardIds },
+          'question.description': { $exists: true, $ne: '' }
+        });
+        cardsAvailable = cardsWithQuestions && cardsWithQuestions.length > 0;
+      }
+    }
+
+    // If no cards are available, don't increment seats and return error
+    if (!cardsAvailable) {
+      return res.status(400).json({ 
+        error: 'No cards are available for this product/package. Please contact support to add cards before playing the game.',
+        noCardsAvailable: true
+      });
+    }
+
+    // Increment seat count when user actually starts playing (only if cards are available)
     transaction.usedSeats = (transaction.usedSeats || 0) + 1;
     
     // Track game play
