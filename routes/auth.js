@@ -817,7 +817,17 @@ router.post(
         });
       }
 
-      if (!user.isEmailVerified) {
+      // Check if user is a member with pending approval
+      const isMember = user.role === 'b2b_member' || user.role === 'b2e_member';
+      if (isMember && user.memberStatus === 'pending') {
+        return res.status(403).json({ 
+          error: 'Your membership request is pending approval. Once the admin approves your request, you will be able to login.',
+          errorCode: 'MEMBER_PENDING_APPROVAL'
+        });
+      }
+
+      // For non-members or approved members, check email verification
+      if (!user.isEmailVerified && !isMember) {
         return res.status(403).json({ 
           error: 'Please verify your email address before logging in. Check your inbox for the verification link.',
           errorCode: 'EMAIL_NOT_VERIFIED'
@@ -1555,7 +1565,7 @@ router.post('/member/requests/:requestId/:action', authenticateToken, async (req
         if (process.env.SMTP_USER && process.env.SMTP_PASS) {
           const loginCode = organization ? organization.uniqueCode : school.uniqueCode;
           const orgName = organization ? organization.name : school.name;
-          const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`;
+          const verificationUrl = `${process.env.FRONTEND_URL}/login`;
           
           const emailHtml = `
 <!DOCTYPE html>
