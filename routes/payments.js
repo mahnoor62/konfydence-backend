@@ -509,7 +509,7 @@ router.post('/webhook', async (req, res) => {
         stripePaymentIntentId: session.payment_intent || session.id,
       });
 
-      // Only create transaction if it doesn't exist (prevent duplicates)
+        // Only create transaction if it doesn't exist (prevent duplicates)
       if (!transaction) {
         const userId = session.metadata.userId;
         const packageId = session.metadata.packageId || null;
@@ -518,6 +518,9 @@ router.post('/webhook', async (req, res) => {
         const uniqueCode = session.metadata.uniqueCode;
         const billingType = session.metadata.billingType || 'one_time';
         const seatLimit = parseInt(session.metadata.seatLimit) || 5;
+        
+        // Purchase date is when the transaction is created (now)
+        const purchaseDate = new Date();
 
         // Verify user exists - fetch user with all fields
         const user = await User.findById(userId);
@@ -585,11 +588,38 @@ router.post('/webhook', async (req, res) => {
 
           packageType = customPackage.basePackageId?.packageType || customPackage.basePackageId?.type || 'standard';
           maxSeats = customPackage.seatLimit || seatLimit;
-          contractEndDate = customPackage.contract?.endDate || null;
+          
+          // Calculate expiry date from custom package expiryTime and expiryTimeUnit
+          // Start date is purchase date, end date is calculated from purchase date + expiry time
+          if (customPackage.expiryTime && customPackage.expiryTimeUnit) {
+            const calculatedExpiryDate = calculateExpiryDate(customPackage, purchaseDate);
+            if (calculatedExpiryDate) {
+              contractEndDate = setEndOfDay(calculatedExpiryDate);
+              console.log('✅ Calculated expiry date for custom package:', {
+                customPackageId: customPackage._id,
+                customPackageName: customPackage.name,
+                expiryTime: customPackage.expiryTime,
+                expiryTimeUnit: customPackage.expiryTimeUnit,
+                startDate: purchaseDate,
+                endDate: contractEndDate
+              });
+            } else {
+              // Fallback to contract endDate if calculation fails
+              contractEndDate = customPackage.contract?.endDate || null;
+            }
+          } else {
+            // Use contract endDate if no expiryTime is set
+            contractEndDate = customPackage.contract?.endDate || null;
+          }
 
           // Activate custom package
           customPackage.status = 'active';
           customPackage.contract.status = 'active';
+          // Update contract startDate to purchase date and endDate to calculated expiry
+          customPackage.contract.startDate = purchaseDate;
+          if (contractEndDate) {
+            customPackage.contract.endDate = contractEndDate;
+          }
           await customPackage.save();
         } else if (packageId) {
           // Handle regular package purchase
