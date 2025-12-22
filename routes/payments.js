@@ -237,7 +237,7 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       return res.status(500).json({ error: 'Stripe is not configured. Please set STRIPE_SECRET_KEY in environment variables.' });
     }
 
-    const { packageId, productId, customPackageId } = req.body;
+    const { packageId, productId, customPackageId, urlType } = req.body;
     
     if (!packageId && !customPackageId) {
       return res.status(400).json({ error: 'Package ID or Custom Package ID is required' });
@@ -246,6 +246,52 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
     const user = await User.findById(req.userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Validate user role and product/package compatibility
+    const Product = require('../models/Product');
+    let product = null;
+    if (productId) {
+      product = await Product.findById(productId);
+      if (!product) {
+        return res.status(404).json({ error: 'Product not found' });
+      }
+      
+      const userRole = user.role;
+      
+      // Check if URL type matches user role - if yes, skip product category validation
+      let urlTypeMatchesRole = false;
+      if (urlType === 'B2B' && (userRole === 'b2b_user' || userRole === 'b2b_member' || userRole === 'admin')) {
+        urlTypeMatchesRole = true;
+      } else if (urlType === 'B2E' && (userRole === 'b2e_user' || userRole === 'b2e_member' || userRole === 'admin')) {
+        urlTypeMatchesRole = true;
+      } else if (urlType === 'B2C' && (userRole === 'b2c_user' || userRole === 'admin')) {
+        urlTypeMatchesRole = true;
+      }
+      
+      // If URL type matches user role, skip product category check (user chose correct type)
+      if (!urlTypeMatchesRole) {
+        // Check if user can purchase this product based on their role
+        const productCategory = product.category || product.targetAudience; // Support both fields: 'private-users', 'schools', 'businesses'
+        
+        if (userRole === 'b2c_user' && productCategory !== 'private-users') {
+          return res.status(403).json({ 
+            error: 'You are a B2C user. You can only purchase B2C products.' 
+          });
+        }
+        
+        if ((userRole === 'b2b_user' || userRole === 'b2b_member') && productCategory !== 'businesses') {
+          return res.status(403).json({ 
+            error: 'You are a B2B user. You can only purchase B2B products.' 
+          });
+        }
+        
+        if ((userRole === 'b2e_user' || userRole === 'b2e_member') && productCategory !== 'schools') {
+          return res.status(403).json({ 
+            error: 'You are a B2E user. You can only purchase B2E products.' 
+          });
+        }
+      }
     }
 
     let package = null;
@@ -561,8 +607,18 @@ router.post('/webhook', async (req, res) => {
             product = await Product.findById(productId);
           }
 
-          // Determine transaction type based on package targetAudiences or product targetAudience
-          transactionType = getTransactionType(package, product);
+          // Determine transaction type based on USER ROLE (not product/package targetAudience)
+          // This ensures transaction type matches the user who is purchasing
+          if (user.role === 'b2c_user') {
+            transactionType = 'b2c_purchase';
+          } else if (user.role === 'b2b_user' || user.role === 'b2b_member') {
+            transactionType = 'b2b_contract';
+          } else if (user.role === 'b2e_user' || user.role === 'b2e_member') {
+            transactionType = 'b2e_contract';
+          } else {
+            // Fallback to product/package targetAudience if role doesn't match
+            transactionType = getTransactionType(package, product);
+          }
           packageType = package.packageType || package.type || 'standard';
           maxSeats = package.maxSeats || seatLimit;
           // Calculate expiry date from expiryTime or use expiryDate (backward compatibility)
@@ -1197,8 +1253,18 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             await customPackage.save();
           } else if (package) {
             // Handle regular package
-            // Determine transaction type based on package targetAudiences or product targetAudience
-            transactionType = getTransactionType(package, product);
+            // Determine transaction type based on USER ROLE (not product/package targetAudience)
+            // This ensures transaction type matches the user who is purchasing
+            if (user.role === 'b2c_user') {
+              transactionType = 'b2c_purchase';
+            } else if (user.role === 'b2b_user' || user.role === 'b2b_member') {
+              transactionType = 'b2b_contract';
+            } else if (user.role === 'b2e_user' || user.role === 'b2e_member') {
+              transactionType = 'b2e_contract';
+            } else {
+              // Fallback to product/package targetAudience if role doesn't match
+              transactionType = getTransactionType(package, product);
+            }
             packageType = package.packageType || package.type || 'standard';
             maxSeats = package.maxSeats || 5;
             // Calculate expiry date from expiryTime or use expiryDate (backward compatibility)
@@ -1612,7 +1678,9 @@ router.post('/use-purchase-code', authenticateToken, async (req, res) => {
       .populate('packageId', 'name type packageType')
       .populate('customPackageId') // Populate custom package
       .populate('productId', 'name description') // Populate productId
-      .populate('userId', 'name email');
+      .populate('userId', 'name email')
+      .populate('organizationId', 'name ownerId')
+      .populate('schoolId', 'name ownerId');
     
     // If custom package exists and productId is not set, get it from custom package
     if (transaction?.customPackageId && !transaction.productId) {
@@ -1641,6 +1709,105 @@ router.post('/use-purchase-code', authenticateToken, async (req, res) => {
     if (transaction.contractPeriod?.endDate) {
       if (isTransactionExpired(transaction.contractPeriod.endDate)) {
         return res.status(400).json({ error: 'This purchase code has expired' });
+      }
+    }
+
+    // Check if user is a member of the organization/school (if code belongs to organization/school)
+    if (transaction.organizationId || transaction.schoolId) {
+      const User = require('../models/User');
+      const Organization = require('../models/Organization');
+      const School = require('../models/School');
+      const currentUser = await User.findById(req.userId);
+      
+      if (!currentUser) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      let isMember = false;
+      let isOwner = false;
+      let memberType = '';
+
+      // Check organization membership
+      if (transaction.organizationId) {
+        const txOrgId = transaction.organizationId?._id || transaction.organizationId;
+        const organization = await Organization.findById(txOrgId);
+        
+        // Check if user is owner
+        if (organization && organization.ownerId) {
+          const orgOwnerId = organization.ownerId?._id || organization.ownerId;
+          if (orgOwnerId.toString() === req.userId.toString()) {
+            isOwner = true;
+            isMember = true;
+            memberType = 'organization';
+          }
+        }
+
+        // Check if user is a member
+        if (!isMember) {
+          const userOrgId = currentUser.organizationId?._id || currentUser.organizationId;
+          if (userOrgId && userOrgId.toString() === txOrgId.toString()) {
+            isMember = true;
+            memberType = 'organization';
+          }
+        }
+      }
+
+      // Check school membership
+      if (!isMember && transaction.schoolId) {
+        const txSchoolId = transaction.schoolId?._id || transaction.schoolId;
+        const school = await School.findById(txSchoolId);
+        
+        // Check if user is owner
+        if (school && school.ownerId) {
+          const schoolOwnerId = school.ownerId?._id || school.ownerId;
+          if (schoolOwnerId.toString() === req.userId.toString()) {
+            isOwner = true;
+            isMember = true;
+            memberType = 'school';
+          }
+        }
+
+        // Check if user is a member
+        if (!isMember) {
+          const userSchoolId = currentUser.schoolId?._id || currentUser.schoolId;
+          if (userSchoolId && userSchoolId.toString() === txSchoolId.toString()) {
+            isMember = true;
+            memberType = 'school';
+          }
+        }
+      }
+
+      // If not a member or owner, return error
+      if (!isMember) {
+        // Determine exact type for error message
+        let entityType = 'organization';
+        if (transaction.schoolId) {
+          entityType = 'institute';
+        } else if (transaction.organizationId) {
+          entityType = 'organization';
+        }
+        
+        return res.status(403).json({ 
+          error: `You are not a member of this ${entityType}. Only approved members can use this code to play the game.` 
+        });
+      }
+
+      // Check if member status is approved (only for members, not owners)
+      if (!isOwner && currentUser.memberStatus !== 'approved') {
+        // Determine exact type for error message
+        let entityType = 'organization';
+        let adminType = 'organization admin';
+        if (transaction.schoolId) {
+          entityType = 'institute';
+          adminType = 'institute admin';
+        } else if (transaction.organizationId) {
+          entityType = 'organization';
+          adminType = 'organization admin';
+        }
+        
+        return res.status(403).json({ 
+          error: `Your membership is not approved yet. Please wait for approval from the ${adminType} before using this code.` 
+        });
       }
     }
 

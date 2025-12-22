@@ -397,6 +397,20 @@ router.post(
             }
           }
 
+          // Check if organization with same name already exists (case-insensitive)
+          // Escape special regex characters in the name
+          const escapedName = organizationName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const duplicateOrg = await Organization.findOne({ 
+            name: { $regex: new RegExp(`^${escapedName}$`, 'i') } 
+          });
+          if (duplicateOrg) {
+            // Cleanup user if organization name is duplicate
+            await User.findByIdAndDelete(user._id);
+            return res.status(400).json({ 
+              error: `An organization with the name "${organizationName.trim()}" already exists. Please use a different name.`
+            });
+          }
+
           const organizationData = {
             name: organizationName.trim(),
             type: organizationType,
@@ -453,6 +467,20 @@ router.post(
             if (!existing) {
               isUnique = true;
             }
+          }
+
+          // Check if school with same name already exists (case-insensitive)
+          // Escape special regex characters in the name
+          const escapedName = organizationName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const duplicateSchool = await School.findOne({ 
+            name: { $regex: new RegExp(`^${escapedName}$`, 'i') } 
+          });
+          if (duplicateSchool) {
+            // Cleanup user if school name is duplicate
+            await User.findByIdAndDelete(user._id);
+            return res.status(400).json({ 
+              error: `A school/institute with the name "${organizationName.trim()}" already exists. Please use a different name.`
+            });
           }
 
           const schoolData = {

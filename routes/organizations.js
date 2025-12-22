@@ -263,6 +263,18 @@ router.post(
         });
       }
 
+      // Check if organization with same name already exists (case-insensitive)
+      // Escape special regex characters in the name
+      const escapedName = req.body.name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const duplicateOrg = await Organization.findOne({ 
+        name: { $regex: new RegExp(`^${escapedName}$`, 'i') } 
+      });
+      if (duplicateOrg) {
+        return res.status(400).json({ 
+          error: `An organization with the name "${req.body.name.trim()}" already exists. Please use a different name.`
+        });
+      }
+
       // Set ownerId from authenticated user (admin creating the organization)
       const organizationData = {
         ...req.body,
@@ -300,6 +312,21 @@ router.put(
   checkPermission('organizations'),
   async (req, res) => {
     try {
+      // Check if name is being changed and if duplicate exists
+      if (req.body.name) {
+        // Escape special regex characters in the name
+        const escapedName = req.body.name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const duplicateOrg = await Organization.findOne({ 
+          name: { $regex: new RegExp(`^${escapedName}$`, 'i') },
+          _id: { $ne: req.params.id } // Exclude current organization
+        });
+        if (duplicateOrg) {
+          return res.status(400).json({ 
+            error: `An organization with the name "${req.body.name.trim()}" already exists. Please use a different name.`
+          });
+        }
+      }
+
       const organization = await Organization.findByIdAndUpdate(
         req.params.id,
         req.body,

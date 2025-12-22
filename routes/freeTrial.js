@@ -202,7 +202,8 @@ router.post('/use-code', authenticateToken, async (req, res) => {
     const freeTrial = await FreeTrial.findOne({
       uniqueCode: code,
     })
-      .populate('packageId', 'name');
+      .populate('packageId', 'name')
+      .populate('organizationId', 'name ownerId');
 
     if (!freeTrial) {
       console.log('Free trial not found for code:', code);
@@ -228,6 +229,60 @@ router.post('/use-code', authenticateToken, async (req, res) => {
     // Check if trial is still active
     if (freeTrial.status !== 'active') {
       return res.status(400).json({ error: 'This trial code is no longer active' });
+    }
+
+    // Check if user is a member of the organization (if code belongs to organization)
+    if (freeTrial.organizationId) {
+      const User = require('../models/User');
+      const Organization = require('../models/Organization');
+      const currentUser = await User.findById(req.userId);
+      
+      if (!currentUser) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const trialOrgId = freeTrial.organizationId?._id || freeTrial.organizationId;
+      const organization = await Organization.findById(trialOrgId);
+      
+      if (!organization) {
+        return res.status(404).json({ error: 'Organization not found' });
+      }
+
+      let isMember = false;
+      let isOwner = false;
+
+      // Check if user is owner
+      if (organization.ownerId) {
+        const orgOwnerId = organization.ownerId?._id || organization.ownerId;
+        if (orgOwnerId.toString() === req.userId.toString()) {
+          isOwner = true;
+          isMember = true;
+        }
+      }
+
+      // Check if user is a member
+      if (!isMember) {
+        const userOrgId = currentUser.organizationId?._id || currentUser.organizationId;
+        if (userOrgId && userOrgId.toString() === trialOrgId.toString()) {
+          isMember = true;
+        }
+      }
+
+      // If not a member or owner, return error
+      if (!isMember) {
+        // FreeTrial only has organizationId, so always use "organization"
+        return res.status(403).json({ 
+          error: 'You are not a member of this organization. Only approved members can use this code to play the game.' 
+        });
+      }
+
+      // Check if member status is approved (only for members, not owners)
+      if (!isOwner && currentUser.memberStatus !== 'approved') {
+        // FreeTrial only has organizationId, so always use "organization"
+        return res.status(403).json({ 
+          error: 'Your membership is not approved yet. Please wait for approval from the organization admin before using this code.' 
+        });
+      }
     }
 
     // Check if this user has already played with this code

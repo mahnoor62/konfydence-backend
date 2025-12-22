@@ -92,6 +92,18 @@ router.post(
         });
       }
 
+      // Check if school with same name already exists (case-insensitive)
+      // Escape special regex characters in the name
+      const escapedName = req.body.name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const duplicateSchool = await School.findOne({ 
+        name: { $regex: new RegExp(`^${escapedName}$`, 'i') } 
+      });
+      if (duplicateSchool) {
+        return res.status(400).json({ 
+          error: `A school/institute with the name "${req.body.name.trim()}" already exists. Please use a different name.`
+        });
+      }
+
       // Set ownerId from authenticated user (admin creating the school)
       const schoolData = {
         ...req.body,
@@ -263,6 +275,21 @@ router.put(
   checkPermission('organizations'),
   async (req, res) => {
     try {
+      // Check if name is being changed and if duplicate exists
+      if (req.body.name) {
+        // Escape special regex characters in the name
+        const escapedName = req.body.name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const duplicateSchool = await School.findOne({ 
+          name: { $regex: new RegExp(`^${escapedName}$`, 'i') },
+          _id: { $ne: req.params.id } // Exclude current school
+        });
+        if (duplicateSchool) {
+          return res.status(400).json({ 
+            error: `A school/institute with the name "${req.body.name.trim()}" already exists. Please use a different name.`
+          });
+        }
+      }
+
       const school = await School.findByIdAndUpdate(
         req.params.id,
         req.body,

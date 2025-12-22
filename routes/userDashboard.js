@@ -485,7 +485,12 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
         currency: t.currency,
         status: t.status,
         packageName: t.packageId?.name || t.customPackageId?.name || 'Unknown',
+        packageId: t.packageId?._id || t.packageId,
         createdAt: t.createdAt,
+        stripePaymentIntentId: t.stripePaymentIntentId || null,
+        maxSeats: t.maxSeats || null,
+        usedSeats: t.usedSeats || null,
+        uniqueCode: t.uniqueCode || null,
       })),
       // Game progress data
       gameProgress: {
@@ -502,7 +507,14 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
           correctAnswers: card.correctAnswers,
           totalQuestions: card.totalQuestions,
           percentageScore: card.maxScore > 0 ? Math.round((card.totalScore / card.maxScore) * 100) : 0
-        }))
+        })),
+        // Include level arrays for level-wise display
+        level1: gameProgressDoc?.level1 || [],
+        level1Stats: gameProgressDoc?.level1Stats || {},
+        level2: gameProgressDoc?.level2 || [],
+        level2Stats: gameProgressDoc?.level2Stats || {},
+        level3: gameProgressDoc?.level3 || [],
+        level3Stats: gameProgressDoc?.level3Stats || {}
       },
       // Organizations for B2B/B2E users
       organizations: organizations.map(org => ({
@@ -677,6 +689,16 @@ router.post('/organizations', authenticateToken, async (req, res) => {
     }
     if (user.role === 'b2e_user' && segment !== 'B2E') {
       return res.status(400).json({ error: 'B2E users can only create B2E organizations' });
+    }
+
+    // Check if organization with same name already exists (case-insensitive)
+    // Escape special regex characters in the name
+    const escapedName = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const duplicateOrg = await Organization.findOne({ 
+      name: { $regex: new RegExp(`^${escapedName}$`, 'i') } 
+    });
+    if (duplicateOrg) {
+      return res.status(400).json({ error: `An organization with the name "${name.trim()}" already exists. Please use a different name.` });
     }
 
     const organization = await Organization.create({

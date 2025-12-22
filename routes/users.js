@@ -373,6 +373,41 @@ router.delete('/:id/membership', authenticateToken, async (req, res) => {
       schoolName = school?.name || null;
     }
 
+    // Remove member from organization/school members array and update seat count
+    if (member.organizationId) {
+      const organization = await Organization.findById(member.organizationId);
+      if (organization) {
+        // Remove member from members array
+        organization.members = organization.members.filter(
+          m => m.toString() !== memberId.toString()
+        );
+        
+        // Update seat usage (decrement usedSeats)
+        if (organization.seatUsage && organization.seatUsage.usedSeats > 0) {
+          organization.seatUsage.usedSeats = Math.max(0, organization.seatUsage.usedSeats - 1);
+        }
+        
+        await organization.save();
+      }
+    }
+    
+    if (member.schoolId) {
+      const school = await School.findById(member.schoolId);
+      if (school) {
+        // Remove member from students array (schools use 'students' field)
+        school.students = school.students.filter(
+          s => s.toString() !== memberId.toString()
+        );
+        
+        // Update seat usage (decrement usedSeats)
+        if (school.seatUsage && school.seatUsage.usedSeats > 0) {
+          school.seatUsage.usedSeats = Math.max(0, school.seatUsage.usedSeats - 1);
+        }
+        
+        await school.save();
+      }
+    }
+
     // Remove member from organization/school
     member.organizationId = null;
     member.schoolId = null;
@@ -381,6 +416,9 @@ router.delete('/:id/membership', authenticateToken, async (req, res) => {
 
     // Delete OrgUser record if exists
     await OrgUser.deleteMany({ userId: member._id });
+
+    // Note: Game progress is NOT deleted when member is removed
+    // This allows the member to retain their progress if they rejoin
 
     // Send termination email
     try {

@@ -156,6 +156,16 @@ router.post('/', async (req, res) => {
         return res.status(400).json({ error: 'You already have an organization. You can edit it but cannot create another one.' });
       }
 
+      // Check if organization with same name already exists (case-insensitive)
+      // Escape special regex characters in the name
+      const escapedName = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const duplicateOrg = await Organization.findOne({ 
+        name: { $regex: new RegExp(`^${escapedName}$`, 'i') } 
+      });
+      if (duplicateOrg) {
+        return res.status(400).json({ error: `An organization with the name "${name.trim()}" already exists. Please use a different name.` });
+      }
+
       const organization = await Organization.create({
         name,
         type,
@@ -172,6 +182,16 @@ router.post('/', async (req, res) => {
       const existingSchool = await School.findOne({ ownerId: user._id });
       if (existingSchool || user.schoolId) {
         return res.status(400).json({ error: 'You already have an institute. You can edit it but cannot create another one.' });
+      }
+
+      // Check if school with same name already exists (case-insensitive)
+      // Escape special regex characters in the name
+      const escapedName = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const duplicateSchool = await School.findOne({ 
+        name: { $regex: new RegExp(`^${escapedName}$`, 'i') } 
+      });
+      if (duplicateSchool) {
+        return res.status(400).json({ error: `A school/institute with the name "${name.trim()}" already exists. Please use a different name.` });
       }
 
       const school = await School.create({
@@ -205,12 +225,38 @@ router.put('/:id', async (req, res) => {
     let updated = null;
 
     if (user.role === 'b2b_user') {
+      // Check if name is being changed and if duplicate exists
+      if (name) {
+        // Escape special regex characters in the name
+        const escapedName = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const duplicateOrg = await Organization.findOne({ 
+          name: { $regex: new RegExp(`^${escapedName}$`, 'i') },
+          _id: { $ne: id } // Exclude current organization
+        });
+        if (duplicateOrg) {
+          return res.status(400).json({ error: `An organization with the name "${name.trim()}" already exists. Please use a different name.` });
+        }
+      }
+
       updated = await Organization.findOneAndUpdate(
         { _id: id, ownerId: user._id },
         { name, type, customType, primaryContact },
         { new: true, runValidators: true }
       );
     } else if (user.role === 'b2e_user') {
+      // Check if name is being changed and if duplicate exists
+      if (name) {
+        // Escape special regex characters in the name
+        const escapedName = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const duplicateSchool = await School.findOne({ 
+          name: { $regex: new RegExp(`^${escapedName}$`, 'i') },
+          _id: { $ne: id } // Exclude current school
+        });
+        if (duplicateSchool) {
+          return res.status(400).json({ error: `A school/institute with the name "${name.trim()}" already exists. Please use a different name.` });
+        }
+      }
+
       updated = await School.findOneAndUpdate(
         { _id: id, ownerId: user._id },
         { name, type, customType, primaryContact },
