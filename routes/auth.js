@@ -1555,7 +1555,7 @@ router.post('/member/requests/:requestId/:action', authenticateToken, async (req
         if (process.env.SMTP_USER && process.env.SMTP_PASS) {
           const loginCode = organization ? organization.uniqueCode : school.uniqueCode;
           const orgName = organization ? organization.name : school.name;
-          const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/member-login`;
+          const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`;
           
           const emailHtml = `
 <!DOCTYPE html>
