@@ -621,9 +621,23 @@ router.post('/webhook', async (req, res) => {
           }
           packageType = package.packageType || package.type || 'standard';
           maxSeats = package.maxSeats || seatLimit;
-          // Calculate expiry date from expiryTime or use expiryDate (backward compatibility)
-          const calculatedExpiryDate = calculateExpiryDate(package, new Date());
-          contractEndDate = calculatedExpiryDate ? setEndOfDay(calculatedExpiryDate) : null;
+          
+          // Calculate expiry date from package expiryTime and expiryTimeUnit
+          // Start date is purchase date, end date is calculated from purchase date + expiry time
+          const calculatedExpiryDate = calculateExpiryDate(package, purchaseDate);
+          if (calculatedExpiryDate) {
+            contractEndDate = setEndOfDay(calculatedExpiryDate);
+            console.log('✅ Calculated expiry date for package:', {
+              packageId: package._id,
+              packageName: package.name,
+              expiryTime: package.expiryTime,
+              expiryTimeUnit: package.expiryTimeUnit,
+              startDate: purchaseDate,
+              endDate: contractEndDate
+            });
+          } else {
+            console.log('⚠️ No expiry time set for package, using default or subscription end date');
+          }
         } else {
           console.error('Neither packageId nor customPackageId found in session metadata:', session.id);
           return res.json({ received: true, error: 'Package ID or Custom Package ID required' });
@@ -695,9 +709,9 @@ router.post('/webhook', async (req, res) => {
           gamePlays: [],
           referrals: [],
           contractPeriod: {
-            startDate: new Date(),
+            startDate: purchaseDate, // Start date is purchase date
             endDate: contractEndDate || (billingType === 'subscription'
-              ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
+              ? new Date(purchaseDate.getTime() + 365 * 24 * 60 * 60 * 1000)
               : null),
           },
         });
@@ -1229,6 +1243,7 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
           let contractEndDate = null;
           let organizationId = null;
           let schoolId = null;
+          const purchaseDateForRenewal = new Date(); // Purchase date for this transaction
 
           // Handle custom package
           if (customPackage) {
@@ -1268,8 +1283,17 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             packageType = package.packageType || package.type || 'standard';
             maxSeats = package.maxSeats || 5;
             // Calculate expiry date from expiryTime or use expiryDate (backward compatibility)
-            const calculatedExpiryDate = calculateExpiryDate(package, new Date());
+            // Use purchase date (current date) as start date
+            const calculatedExpiryDate = calculateExpiryDate(package, purchaseDateForRenewal);
             contractEndDate = calculatedExpiryDate ? setEndOfDay(calculatedExpiryDate) : null;
+            console.log('✅ Calculated expiry date for renewal package:', {
+              packageId: package._id,
+              packageName: package.name,
+              expiryTime: package.expiryTime,
+              expiryTimeUnit: package.expiryTimeUnit,
+              startDate: purchaseDateForRenewal,
+              endDate: contractEndDate
+            });
             
             // Get organizationId or schoolId from user if they have one
             organizationId = user.organizationId || null;
@@ -1322,7 +1346,7 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             gamePlays: [],
             referrals: [],
             contractPeriod: {
-              startDate: new Date(),
+              startDate: purchaseDateForRenewal || new Date(), // Use purchase date
               endDate: contractEndDate || (billingType === 'subscription'
                 ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
                 : null),
