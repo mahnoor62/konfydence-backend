@@ -114,16 +114,39 @@ router.get('/', authenticateToken, async (req, res) => {
       .populate('requestedModifications.cardsToAdd', 'title category')
       .populate('requestedModifications.cardsToRemove', 'title category')
       .populate('productId', 'name description price')
-      .populate('productIds', 'name description price visibility')
-      .populate('customPackageId', 'name status')
+      .populate({
+        path: 'productIds',
+        select: 'name description price visibility imageUrl category',
+        populate: {
+          path: 'level1 level2 level3',
+          select: 'title category rating',
+          model: 'Card'
+        }
+      })
+      .populate({
+        path: 'customPackageId',
+        populate: {
+          path: 'productIds',
+          select: 'name description price visibility imageUrl category',
+          populate: {
+            path: 'level1 level2 level3',
+            select: 'title category rating',
+            model: 'Card'
+          }
+        }
+      })
       .sort({ createdAt: -1 });
     
-    // Filter out completed requests (they should not show in the requests table)
-    // Only show pending, reviewing, approved, or rejected requests
-    // Hide completed requests only if productId or productIds exist
-    const activeRequests = requests.filter(req => 
-      req.status !== 'completed' || (!req.productId && (!req.productIds || req.productIds.length === 0))
-    );
+    // Include all requests EXCEPT completed requests without customPackageId
+    // Show: pending, reviewing, approved, rejected, AND completed/approved with customPackageId
+    const activeRequests = requests.filter(req => {
+      // If status is completed but no customPackageId, hide it
+      if (req.status === 'completed' && !req.customPackageId) {
+        return false;
+      }
+      // Show all other requests (including approved with customPackageId)
+      return true;
+    });
     
     console.log(`Found ${requests.length} total requests, ${activeRequests.length} active requests for user ${req.userId}`);
     res.json(activeRequests);
@@ -139,10 +162,16 @@ router.get('/:id', authenticateToken, async (req, res) => {
       .populate('organizationId', 'name uniqueCode')
       .populate('schoolId', 'name uniqueCode')
       .populate('productId', 'name description price')
-      .populate('productIds', 'name description price visibility')
+      .populate('productIds', 'name description price visibility imageUrl category')
       .populate('requestedModifications.cardsToAdd')
       .populate('requestedModifications.cardsToRemove')
-      .populate('customPackageId');
+      .populate({
+        path: 'customPackageId',
+        populate: {
+          path: 'productIds',
+          select: 'name description price visibility imageUrl category'
+        }
+      });
     if (!request) {
       return res.status(404).json({ error: 'Request not found' });
     }
@@ -216,6 +245,10 @@ router.put(
         return res.status(404).json({ error: 'Request not found' });
       }
 
+      // Initialize email tracking variables BEFORE custom package creation
+      let emailSent = false;
+      let emailError = null;
+
       // If status is 'approved' and productIds are provided, create CustomPackage entry
       if (req.body.status === 'approved' && req.body.productIds && req.body.productIds.length > 0) {
         try {
@@ -286,7 +319,52 @@ router.put(
               customPackageId: customPackage._id
             });
 
-            console.log('CustomPackage created successfully:', customPackage._id);
+            console.log('✅ CustomPackage created successfully:', customPackage._id);
+            console.log('📧 ========== EMAIL SENDING FOR CUSTOM PACKAGE CREATION ==========');
+            
+            // Send custom package creation email immediately after creation
+            try {
+              // Populate custom package for email
+              const populatedCustomPackage = await CustomPackage.findById(customPackage._id)
+                .populate('basePackageId')
+                .populate('organizationId', 'name segment primaryContact')
+                .populate('schoolId', 'name primaryContact')
+                .populate('addedCardIds', 'title category');
+              
+              // Prepare email request object from the original request
+              const emailRequest = {
+                contactName: request.contactName,
+                contactEmail: request.contactEmail,
+                organizationName: request.organizationName,
+                basePackageId: populatedCustomPackage.basePackageId || null,
+                requestedModifications: {
+                  seatLimit: customPackage.seatLimit || request.requestedModifications?.seatLimit
+                }
+              };
+              
+              console.log('📧 Preparing to send custom package creation email:', {
+                to: emailRequest.contactEmail,
+                contactName: emailRequest.contactName,
+                organizationName: emailRequest.organizationName,
+                customPackageId: populatedCustomPackage._id
+              });
+              
+              const emailResult = await sendCustomPackageCreatedEmail(emailRequest, populatedCustomPackage);
+              
+              if (emailResult.success) {
+                console.log('✅ Custom package creation email sent successfully!');
+                console.log('✅ Message ID:', emailResult.messageId);
+                emailSent = true;
+              } else {
+                console.error('❌ Custom package creation email failed:', emailResult.error || emailResult.message);
+                emailError = emailResult.error || emailResult.message || 'Email sending failed';
+              }
+            } catch (emailErr) {
+              console.error('❌ Error sending custom package creation email:', emailErr);
+              console.error('❌ Error stack:', emailErr.stack);
+              emailError = emailErr.message || 'Unknown error';
+              // Don't fail the request if email fails
+            }
           } else {
             // Update existing CustomPackage with new productIds if needed
             if (req.body.productIds && req.body.productIds.length > 0) {
@@ -303,9 +381,6 @@ router.put(
           // Just log the error
         }
       }
-
-      let emailSent = false;
-      let emailError = null;
 
       // Send email notification if status changed
       if (currentRequest.status !== req.body.status) {

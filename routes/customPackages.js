@@ -27,6 +27,9 @@ router.get('/', authenticateToken, async (req, res) => {
     let ownerOrgId = null;
     let ownerSchoolId = null;
 
+    // Initialize customPackageIdsFromRequests outside the if block to avoid ReferenceError
+    let customPackageIdsFromRequests = [];
+
     // If not super admin, filter by user's organization/school
     if (!isSuperAdmin && user) {
       // Check if user is owner of any organization/school
@@ -44,6 +47,7 @@ router.get('/', authenticateToken, async (req, res) => {
       }
 
       // Build query: user's organizationId/schoolId OR user's owned organization/school
+      // OR packages created from user's custom package requests
       const orgIds = [];
       const schoolIds = [];
 
@@ -60,17 +64,55 @@ router.get('/', authenticateToken, async (req, res) => {
         schoolIds.push(ownerSchoolId);
       }
 
-      // Use $or to match any of the organization/school IDs
+      // Also check if user has any completed custom package requests
+      // and include packages created from those requests
+      try {
+        const CustomPackageRequest = require('../models/CustomPackageRequest');
+        const User = require('../models/User');
+        const userEmail = user.email?.toLowerCase();
+        
+        // Find requests by user's email (contactEmail) that are completed
+        const userRequests = await CustomPackageRequest.find({
+          contactEmail: userEmail,
+          status: 'completed',
+          customPackageId: { $ne: null }
+        }).select('customPackageId');
+        
+        if (userRequests && userRequests.length > 0) {
+          userRequests.forEach(req => {
+            if (req.customPackageId) {
+              customPackageIdsFromRequests.push(req.customPackageId);
+            }
+          });
+          console.log('✅ Found custom packages from user requests:', customPackageIdsFromRequests.length);
+        }
+      } catch (requestError) {
+        console.warn('⚠️ Error checking user requests:', requestError);
+      }
+
+      // Build query with $or conditions
+      const orConditions = [];
+      
+      // Add organization/school conditions
       if (orgIds.length > 0 || schoolIds.length > 0) {
-        query.$or = [];
         if (orgIds.length > 0) {
-          query.$or.push({ organizationId: { $in: orgIds } });
+          orConditions.push({ organizationId: { $in: orgIds } });
         }
         if (schoolIds.length > 0) {
-          query.$or.push({ schoolId: { $in: schoolIds } });
+          orConditions.push({ schoolId: { $in: schoolIds } });
         }
+      }
+      
+      // Add custom package IDs from user's requests
+      if (customPackageIdsFromRequests.length > 0) {
+        orConditions.push({ _id: { $in: customPackageIdsFromRequests } });
+      }
+
+      // Use $or to match any of the conditions
+      if (orConditions.length > 0) {
+        query.$or = orConditions;
       } else {
-        // If user has no organization/school, return empty array
+        // If user has no organization/school and no requests, return empty array
         return res.json([]);
       }
     } else {
@@ -86,12 +128,61 @@ router.get('/', authenticateToken, async (req, res) => {
     console.log('🔍 Owner Org ID:', ownerOrgId);
     console.log('🔍 Owner School ID:', ownerSchoolId);
 
-    const customPackages = await CustomPackage.find(query)
-      .populate('basePackageId', 'name description')
-      .populate('organizationId', 'name uniqueCode segment')
-      .populate('schoolId', 'name uniqueCode')
-      .populate('productIds', 'name description price visibility imageUrl')
-      .sort({ createdAt: -1 });
+    // For non-admin users, show 'active' packages OR packages from their requests (even if pending)
+    // Super admins can see all packages (including pending/archived)
+    let customPackages;
+    if (!isSuperAdmin) {
+      // If we have customPackageIdsFromRequests, fetch all matching packages and filter
+      if (customPackageIdsFromRequests.length > 0) {
+        // Fetch packages matching organizationId/schoolId OR from requests (no status filter yet)
+        customPackages = await CustomPackage.find(query)
+          .populate('basePackageId', 'name description')
+          .populate('organizationId', 'name uniqueCode segment')
+          .populate('schoolId', 'name uniqueCode')
+          .populate({
+            path: 'productIds',
+            select: 'name description price visibility imageUrl category',
+            populate: {
+              path: 'level1 level2 level3',
+              select: 'title category rating',
+              model: 'Card'
+            }
+          })
+          .sort({ createdAt: -1 });
+        
+        // Filter: show active packages OR packages from user's requests (even if pending)
+        const requestIdsSet = new Set(customPackageIdsFromRequests.map(id => id.toString()));
+        customPackages = customPackages.filter(cp => {
+          const isFromRequest = requestIdsSet.has(cp._id.toString());
+          return cp.status === 'active' || isFromRequest;
+        });
+      } else {
+        // No requests, only show active packages
+        query.status = 'active';
+        customPackages = await CustomPackage.find(query)
+          .populate('basePackageId', 'name description')
+          .populate('organizationId', 'name uniqueCode segment')
+          .populate('schoolId', 'name uniqueCode')
+          .populate({
+            path: 'productIds',
+            select: 'name description price visibility imageUrl category',
+            populate: {
+              path: 'level1 level2 level3',
+              select: 'title category rating',
+              model: 'Card'
+            }
+          })
+          .sort({ createdAt: -1 });
+      }
+    } else {
+      // Super admin - show all
+      customPackages = await CustomPackage.find(query)
+        .populate('basePackageId', 'name description')
+        .populate('organizationId', 'name uniqueCode segment')
+        .populate('schoolId', 'name uniqueCode')
+        .populate('productIds', 'name description price visibility imageUrl')
+        .sort({ createdAt: -1 });
+    }
 
     console.log(`✅ Found ${customPackages.length} custom packages for user ${req.userId}`);
     customPackages.forEach(cp => {
@@ -109,7 +200,8 @@ router.get('/:id', authenticateToken, checkPermission('organizations'), async (r
   try {
     const customPackage = await CustomPackage.findById(req.params.id)
       .populate('basePackageId')
-      .populate('organizationId')
+      .populate('organizationId', 'name uniqueCode segment')
+      .populate('schoolId', 'name uniqueCode')
       .populate('addedCardIds');
     if (!customPackage) {
       return res.status(404).json({ error: 'Custom package not found' });
@@ -146,22 +238,55 @@ router.post(
       }
 
       // Check if organizationId or schoolId is provided
+      // If customPackageRequestId is provided, extract organizationId/schoolId from request
+      let organizationId = req.body.organizationId || null;
+      let schoolId = req.body.schoolId || null;
+      
+      if (req.body.customPackageRequestId && (!organizationId && !schoolId)) {
+        try {
+          const CustomPackageRequest = require('../models/CustomPackageRequest');
+          const relatedRequest = await CustomPackageRequest.findById(req.body.customPackageRequestId);
+          if (relatedRequest) {
+            organizationId = relatedRequest.organizationId || organizationId;
+            schoolId = relatedRequest.schoolId || schoolId;
+            console.log('✅ Extracted organizationId/schoolId from request:', {
+              organizationId,
+              schoolId
+            });
+          }
+        } catch (requestError) {
+          console.warn('⚠️ Could not extract organizationId/schoolId from request:', requestError);
+        }
+      }
+      
       let organization = null;
       let school = null;
 
-      if (req.body.organizationId) {
-        organization = await Organization.findById(req.body.organizationId);
+      if (organizationId) {
+        organization = await Organization.findById(organizationId);
         if (!organization) {
           return res.status(404).json({ error: 'Organization not found' });
         }
+        console.log('✅ Organization found:', {
+          id: organization._id,
+          name: organization.name,
+          hasPrimaryContact: !!organization.primaryContact,
+          primaryContactEmail: organization.primaryContact?.email
+        });
       }
 
-      if (req.body.schoolId) {
+      if (schoolId) {
         const School = require('../models/School');
-        school = await School.findById(req.body.schoolId);
+        school = await School.findById(schoolId);
         if (!school) {
           return res.status(404).json({ error: 'School not found' });
         }
+        console.log('✅ School found:', {
+          id: school._id,
+          name: school.name,
+          hasPrimaryContact: !!school.primaryContact,
+          primaryContactEmail: school.primaryContact?.email
+        });
       }
 
       if (!organization && !school) {
@@ -171,8 +296,8 @@ router.post(
       // Log incoming request body for debugging
       console.log('📦 Creating custom package - Request body:', {
         customPackageRequestId: req.body.customPackageRequestId,
-        organizationId: req.body.organizationId,
-        schoolId: req.body.schoolId,
+        organizationId: organizationId || req.body.organizationId,
+        schoolId: schoolId || req.body.schoolId,
         name: req.body.name
       });
 
@@ -195,14 +320,60 @@ router.post(
         ...req.body,
         name: req.body.name || basePackage.name,
         description: req.body.description || basePackage.description,
-        productIds: productIds.length > 0 ? productIds : req.body.productIds || [] // Ensure productIds array is set
+        organizationId: organizationId || req.body.organizationId || null,
+        schoolId: schoolId || req.body.schoolId || null,
+        productIds: productIds.length > 0 ? productIds : req.body.productIds || [], // Ensure productIds array is set
+        // Force status to 'active' when package is created (override any pending status from req.body)
+        status: 'active',
+        contract: {
+          ...req.body.contract,
+          status: 'active' // Force contract status to 'active'
+        }
       });
 
+      // Ensure status is 'active' (double check)
+      if (customPackage.status !== 'active') {
+        customPackage.status = 'active';
+      }
+      if (customPackage.contract.status !== 'active') {
+        customPackage.contract.status = 'active';
+      }
       await customPackage.save();
       
       console.log('✅ CustomPackage created successfully:', customPackage._id);
       console.log('📦 Request body customPackageRequestId:', req.body.customPackageRequestId);
       console.log('📦 Full request body keys:', Object.keys(req.body));
+      
+      // Find and update custom package request BEFORE email sending
+      let relatedRequest = null;
+      if (req.body.customPackageRequestId) {
+        try {
+          const CustomPackageRequest = require('../models/CustomPackageRequest');
+          relatedRequest = await CustomPackageRequest.findById(req.body.customPackageRequestId)
+            .populate('basePackageId');
+          if (relatedRequest) {
+            relatedRequest.customPackageId = customPackage._id;
+            relatedRequest.status = 'completed';
+            await relatedRequest.save();
+            console.log('✅ Updated custom package request:', {
+              requestId: relatedRequest._id,
+              customPackageId: customPackage._id,
+              status: 'completed',
+              contactEmail: relatedRequest.contactEmail,
+              contactName: relatedRequest.contactName,
+              organizationName: relatedRequest.organizationName
+            });
+          } else {
+            console.warn('⚠️ Custom package request not found:', req.body.customPackageRequestId);
+          }
+        } catch (requestUpdateError) {
+          console.error('❌ Error updating custom package request:', requestUpdateError);
+          console.error('❌ Error stack:', requestUpdateError.stack);
+          // Don't fail the whole operation if request update fails
+        }
+      } else {
+        console.warn('⚠️ No customPackageRequestId provided in request body');
+      }
 
       // Add custom package to organization's customPackages array
       try {
@@ -242,54 +413,134 @@ router.post(
         populated = customPackage; // Use unpopulated version as fallback
       }
 
+      // CRITICAL: Log that we're about to start email sending
+      console.log('🚨 ABOUT TO START EMAIL SENDING PROCESS');
+      console.log('🚨 populated exists?', !!populated);
+      console.log('🚨 organization exists?', !!organization);
+      console.log('🚨 school exists?', !!school);
+      console.log('🚨 relatedRequest exists?', !!relatedRequest);
+
       // Send email notification
       // Priority: 1) customPackageRequestId contactEmail, 2) Organization primaryContact.email
       console.log('📧 ========== EMAIL SENDING PROCESS STARTED ==========');
+      console.log('📧 This log should appear after CustomPackage created successfully');
       console.log('📧 Custom package ID:', customPackage._id);
       console.log('📧 Request body customPackageRequestId:', req.body.customPackageRequestId);
       console.log('📧 Organization ID:', req.body.organizationId);
       console.log('📧 School ID:', req.body.schoolId);
+      console.log('📧 Current organization object:', organization ? {
+        id: organization._id,
+        name: organization.name,
+        hasPrimaryContact: !!organization.primaryContact,
+        primaryContactEmail: organization.primaryContact?.email
+      } : 'NULL');
+      console.log('📧 Current school object:', school ? {
+        id: school._id,
+        name: school.name,
+        hasPrimaryContact: !!school.primaryContact,
+        primaryContactEmail: school.primaryContact?.email
+      } : 'NULL');
       
       let emailSent = false;
       let emailRecipient = null;
       let emailError = null;
       let emailRequest = null; // Store request object for email template
       
+      console.log('📧 Starting email sending try block...');
       try {
-        // Step 1: Try to find request using customPackageRequestId
+        // Step 1: Try to use the request we already found (or find it again)
+        // PRIORITY: If customPackageRequestId is provided, we MUST use the request's contactEmail
         if (req.body.customPackageRequestId) {
-          console.log('🔍 Finding custom package request:', req.body.customPackageRequestId);
+          console.log('🔍 Step 1: Using custom package request for email:', req.body.customPackageRequestId);
+          console.log('🔍 relatedRequest exists?', !!relatedRequest);
           
-          const relatedRequest = await CustomPackageRequest.findById(req.body.customPackageRequestId)
-            .populate('basePackageId');
-          
-          if (relatedRequest && relatedRequest.contactEmail) {
-            emailRecipient = relatedRequest.contactEmail;
-            emailRequest = relatedRequest;
-            console.log('✅ Found request with email:', emailRecipient);
-            console.log('📧 Contact Name:', relatedRequest.contactName);
-            console.log('📧 Organization:', relatedRequest.organizationName);
-          } else {
-            console.warn('⚠️ Request not found or no contactEmail');
+          // Use the request we already found, or find it again if not found
+          if (!relatedRequest) {
+            console.log('🔍 relatedRequest not found, fetching again...');
+            const CustomPackageRequest = require('../models/CustomPackageRequest');
+            relatedRequest = await CustomPackageRequest.findById(req.body.customPackageRequestId)
+              .populate('basePackageId');
+            console.log('🔍 Fetched relatedRequest:', {
+              found: !!relatedRequest,
+              id: relatedRequest?._id,
+              contactEmail: relatedRequest?.contactEmail
+            });
           }
+          
+          if (relatedRequest) {
+            if (relatedRequest.contactEmail) {
+              emailRecipient = relatedRequest.contactEmail.toLowerCase().trim();
+              emailRequest = relatedRequest;
+              console.log('✅ Step 1 SUCCESS: Using request with email:', emailRecipient);
+              console.log('📧 Contact Name:', relatedRequest.contactName);
+              console.log('📧 Organization:', relatedRequest.organizationName);
+              console.log('📧 Request Status:', relatedRequest.status);
+            } else {
+              console.error('❌ Step 1 FAILED: Request found but contactEmail is missing:', {
+                requestId: relatedRequest._id,
+                requestData: {
+                  contactName: relatedRequest.contactName,
+                  organizationName: relatedRequest.organizationName,
+                  hasContactEmail: !!relatedRequest.contactEmail
+                }
+              });
+              emailError = 'Request contactEmail is missing';
+            }
+          } else {
+            console.error('❌ Step 1 FAILED: Custom package request not found:', req.body.customPackageRequestId);
+            emailError = 'Custom package request not found';
+          }
+        } else {
+          console.log('⚠️ Step 1 SKIPPED: No customPackageRequestId in request body');
         }
         
         // Step 2: If no request email, try organization primaryContact.email
-        if (!emailRecipient && organization && organization.primaryContact && organization.primaryContact.email) {
-          emailRecipient = organization.primaryContact.email;
-          // Create a mock request object for email template
-          emailRequest = {
-            contactName: organization.primaryContact.name || organization.name,
-            contactEmail: organization.primaryContact.email,
-            organizationName: organization.name,
-            basePackageId: populated.basePackageId || basePackage,
-            requestedModifications: {
-              seatLimit: customPackage.seatLimit
+        console.log('🔍 Step 2: Checking organization primaryContact...');
+        console.log('🔍 Organization exists?', !!organization);
+        console.log('🔍 Organization has primaryContact?', !!organization?.primaryContact);
+        console.log('🔍 Organization primaryContact email?', organization?.primaryContact?.email);
+        
+        if (!emailRecipient && organization) {
+          // Make sure organization is populated with primaryContact
+          if (!organization.primaryContact) {
+            console.log('🔍 Organization primaryContact not populated, fetching organization again...');
+            const populatedOrg = await Organization.findById(organization._id);
+            if (populatedOrg && populatedOrg.primaryContact && populatedOrg.primaryContact.email) {
+              emailRecipient = populatedOrg.primaryContact.email;
+              emailRequest = {
+                contactName: populatedOrg.primaryContact.name || populatedOrg.name,
+                contactEmail: populatedOrg.primaryContact.email,
+                organizationName: populatedOrg.name,
+                basePackageId: populated.basePackageId || basePackage,
+                requestedModifications: {
+                  seatLimit: customPackage.seatLimit
+                }
+              };
+              console.log('✅ Step 2 SUCCESS: Using organization primaryContact email:', emailRecipient);
+              console.log('📧 Contact Name:', emailRequest.contactName);
+              console.log('📧 Organization:', emailRequest.organizationName);
+            } else {
+              console.warn('⚠️ Step 2 FAILED: Organization does not have primaryContact.email');
             }
-          };
-          console.log('✅ Using organization primaryContact email:', emailRecipient);
-          console.log('📧 Contact Name:', emailRequest.contactName);
-          console.log('📧 Organization:', emailRequest.organizationName);
+          } else if (organization.primaryContact && organization.primaryContact.email) {
+            emailRecipient = organization.primaryContact.email;
+            emailRequest = {
+              contactName: organization.primaryContact.name || organization.name,
+              contactEmail: organization.primaryContact.email,
+              organizationName: organization.name,
+              basePackageId: populated.basePackageId || basePackage,
+              requestedModifications: {
+                seatLimit: customPackage.seatLimit
+              }
+            };
+            console.log('✅ Step 2 SUCCESS: Using organization primaryContact email:', emailRecipient);
+            console.log('📧 Contact Name:', emailRequest.contactName);
+            console.log('📧 Organization:', emailRequest.organizationName);
+          }
+        } else if (emailRecipient) {
+          console.log('⚠️ Step 2 SKIPPED: Email recipient already found from Step 1');
+        } else {
+          console.log('⚠️ Step 2 SKIPPED: No organization found');
         }
         
         // Step 3: If no organization email, try school primaryContact.email
@@ -332,16 +583,39 @@ router.post(
           emailError = 'No email recipient found (no customPackageRequestId, no organization primaryContact, no school primaryContact)';
         }
       } catch (error) {
+        console.error('❌ ========== ERROR IN EMAIL SENDING PROCESS ==========');
         console.error('❌ Error in email sending process:', error);
+        console.error('❌ Error message:', error.message);
         console.error('❌ Error stack:', error.stack);
+        console.error('❌ Error name:', error.name);
+        console.error('❌ Error type:', typeof error);
         emailError = error.message || 'Unknown error';
       }
       
+      console.log('📧 Email sending try-catch block completed');
+      
+      console.log('📧 ========== EMAIL SENDING PROCESS COMPLETED ==========');
       console.log('📧 Email sending completed:', {
         emailSent,
         emailRecipient,
-        emailError
+        emailError,
+        hasRecipient: !!emailRecipient,
+        hasRequest: !!emailRequest,
+        smtpConfigured: !!(process.env.SMTP_USER && process.env.SMTP_PASS)
       });
+
+      // Log SMTP configuration status
+      if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+        console.error('❌ SMTP NOT CONFIGURED:');
+        console.error('❌ SMTP_USER:', process.env.SMTP_USER ? 'Set' : 'MISSING');
+        console.error('❌ SMTP_PASS:', process.env.SMTP_PASS ? 'Set' : 'MISSING');
+        console.error('❌ SMTP_HOST:', process.env.SMTP_HOST || 'smtp.gmail.com (default)');
+      } else {
+        console.log('✅ SMTP Configuration Check:');
+        console.log('✅ SMTP_USER:', process.env.SMTP_USER ? 'Set' : 'Missing');
+        console.log('✅ SMTP_PASS:', process.env.SMTP_PASS ? 'Set' : 'Missing');
+        console.log('✅ SMTP_HOST:', process.env.SMTP_HOST || 'smtp.gmail.com (default)');
+      }
 
       // Return response with email status
       const responseData = {
@@ -356,6 +630,17 @@ router.post(
         emailRecipient: responseData.emailRecipient,
         emailError: responseData.emailError
       });
+      
+      // If email was not sent, log detailed error for debugging
+      if (!emailSent) {
+        console.error('❌ EMAIL NOT SENT - Debugging Info:');
+        console.error('❌ Email Recipient:', emailRecipient || 'NOT FOUND');
+        console.error('❌ Email Request Object:', emailRequest ? 'EXISTS' : 'MISSING');
+        console.error('❌ Email Error:', emailError || 'NO ERROR MESSAGE');
+        console.error('❌ Custom Package Request ID:', req.body.customPackageRequestId || 'NOT PROVIDED');
+        console.error('❌ Organization ID:', req.body.organizationId || 'NOT PROVIDED');
+        console.error('❌ School ID:', req.body.schoolId || 'NOT PROVIDED');
+      }
       
       res.status(201).json(responseData);
     } catch (error) {

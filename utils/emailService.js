@@ -376,11 +376,12 @@ const createCustomPackageEmailTemplate = (request, customPackage) => {
                 <p style="margin: 0 0 10px 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
                   Your custom package is now active and ready to use. Please visit your organization dashboard to view and manage your package.
                 </p>
-                <div style="background-color: ${colors.secondary}; padding: 15px; border-radius: 6px; margin: 15px 0; text-align: center;">
-                  <a href="${process.env.FRONTEND_URL || 'https://konfydence.com'}/dashboard/institute" style="display: inline-block; background-color: ${colors.white}; color: ${colors.secondary}; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">
+                <!-- Visit Dashboard button commented out temporarily -->
+                <!-- <div style="background-color: ${colors.secondary}; padding: 15px; border-radius: 6px; margin: 15px 0; text-align: center;">
+                  <a href="${process.env.FRONTEND_URL}/dashboard/institute" style="display: inline-block; background-color: ${colors.white}; color: ${colors.secondary}; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">
                     Visit Dashboard
                   </a>
-                </div>
+                </div> -->
                 <p style="margin: 10px 0 0 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
                   Our team will be in touch shortly to help you get started and answer any questions you may have.
                 </p>
@@ -476,7 +477,8 @@ Pricing Information:
 
 Your custom package is now active and ready to use. Please visit your organization dashboard to view and manage your package.
 
-Dashboard Link: ${process.env.FRONTEND_URL || 'https://konfydence.com'}/dashboard/institute
+<!-- Dashboard Link commented out temporarily -->
+<!-- Dashboard Link: ${process.env.FRONTEND_URL}/dashboard/institute -->
 
 Our team will be in touch shortly to help you get started.
 

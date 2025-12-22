@@ -315,7 +315,8 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
         return res.status(404).json({ error: 'Custom package not found' });
       }
 
-      // Check if custom package is already purchased by this organization/school
+      // Allow purchase even if status is 'pending' - admin created it, so it's ready for purchase
+      // Only check if it's already purchased
       const existingTransaction = await Transaction.findOne({
         $or: [
           { organizationId: customPackage.organizationId, customPackageId: customPackage._id, status: 'paid' },
@@ -326,6 +327,15 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       if (existingTransaction) {
         return res.status(400).json({ error: 'This custom package has already been purchased' });
       }
+
+      console.log('✅ Custom package purchase check passed:', {
+        customPackageId: customPackage._id,
+        customPackageName: customPackage.name,
+        customPackageStatus: customPackage.status,
+        organizationId: customPackage.organizationId,
+        schoolId: customPackage.schoolId,
+        userId: req.userId
+      });
 
       // No permission check needed - if custom package is created for an organization/school,
       // any admin of that organization/school can purchase it
@@ -621,6 +631,26 @@ router.post('/webhook', async (req, res) => {
             customPackage.contract.endDate = contractEndDate;
           }
           await customPackage.save();
+
+          // Update custom package request status to 'completed' if it exists
+          if (customPackage.customPackageRequestId) {
+            const CustomPackageRequest = require('../models/CustomPackageRequest');
+            const relatedRequest = await CustomPackageRequest.findById(customPackage.customPackageRequestId);
+            if (relatedRequest) {
+              relatedRequest.status = 'completed';
+              await relatedRequest.save();
+              console.log(`✅ Custom package request ${relatedRequest._id} marked as completed after purchase`);
+            }
+          } else {
+            // Try to find request by customPackageId
+            const CustomPackageRequest = require('../models/CustomPackageRequest');
+            const relatedRequest = await CustomPackageRequest.findOne({ customPackageId: customPackage._id });
+            if (relatedRequest) {
+              relatedRequest.status = 'completed';
+              await relatedRequest.save();
+              console.log(`✅ Custom package request ${relatedRequest._id} marked as completed after purchase (found by customPackageId)`);
+            }
+          }
         } else if (packageId) {
           // Handle regular package purchase
           package = await Package.findById(packageId);
