@@ -242,18 +242,21 @@ router.post(
         populated = customPackage; // Use unpopulated version as fallback
       }
 
-      // Send email notification - SIMPLIFIED APPROACH
-      // Get email directly from customPackageRequestId
+      // Send email notification
+      // Priority: 1) customPackageRequestId contactEmail, 2) Organization primaryContact.email
       console.log('📧 ========== EMAIL SENDING PROCESS STARTED ==========');
       console.log('📧 Custom package ID:', customPackage._id);
       console.log('📧 Request body customPackageRequestId:', req.body.customPackageRequestId);
+      console.log('📧 Organization ID:', req.body.organizationId);
+      console.log('📧 School ID:', req.body.schoolId);
       
       let emailSent = false;
       let emailRecipient = null;
       let emailError = null;
+      let emailRequest = null; // Store request object for email template
       
       try {
-        // Step 1: Find the request using customPackageRequestId
+        // Step 1: Try to find request using customPackageRequestId
         if (req.body.customPackageRequestId) {
           console.log('🔍 Finding custom package request:', req.body.customPackageRequestId);
           
@@ -262,29 +265,71 @@ router.post(
           
           if (relatedRequest && relatedRequest.contactEmail) {
             emailRecipient = relatedRequest.contactEmail;
+            emailRequest = relatedRequest;
             console.log('✅ Found request with email:', emailRecipient);
             console.log('📧 Contact Name:', relatedRequest.contactName);
             console.log('📧 Organization:', relatedRequest.organizationName);
-            
-            // Step 2: Send email using the same pattern as other emails in the system
-            console.log('📧 Sending email to:', emailRecipient);
-            const emailResult = await sendCustomPackageCreatedEmail(relatedRequest, populated);
-            
-            if (emailResult.success) {
-              console.log('✅ Email sent successfully!');
-              console.log('✅ Message ID:', emailResult.messageId);
-              emailSent = true;
-            } else {
-              console.error('❌ Email sending failed:', emailResult.error || emailResult.message);
-              emailError = emailResult.error || emailResult.message || 'Email sending failed';
-            }
           } else {
             console.warn('⚠️ Request not found or no contactEmail');
-            emailError = relatedRequest ? 'No contactEmail in request' : 'Request not found';
+          }
+        }
+        
+        // Step 2: If no request email, try organization primaryContact.email
+        if (!emailRecipient && organization && organization.primaryContact && organization.primaryContact.email) {
+          emailRecipient = organization.primaryContact.email;
+          // Create a mock request object for email template
+          emailRequest = {
+            contactName: organization.primaryContact.name || organization.name,
+            contactEmail: organization.primaryContact.email,
+            organizationName: organization.name,
+            basePackageId: populated.basePackageId || basePackage,
+            requestedModifications: {
+              seatLimit: customPackage.seatLimit
+            }
+          };
+          console.log('✅ Using organization primaryContact email:', emailRecipient);
+          console.log('📧 Contact Name:', emailRequest.contactName);
+          console.log('📧 Organization:', emailRequest.organizationName);
+        }
+        
+        // Step 3: If no organization email, try school primaryContact.email
+        if (!emailRecipient && school) {
+          const School = require('../models/School');
+          const populatedSchool = await School.findById(school._id || school);
+          if (populatedSchool && populatedSchool.primaryContact && populatedSchool.primaryContact.email) {
+            emailRecipient = populatedSchool.primaryContact.email;
+            // Create a mock request object for email template
+            emailRequest = {
+              contactName: populatedSchool.primaryContact.name || populatedSchool.name,
+              contactEmail: populatedSchool.primaryContact.email,
+              organizationName: populatedSchool.name,
+              basePackageId: populated.basePackageId || basePackage,
+              requestedModifications: {
+                seatLimit: customPackage.seatLimit
+              }
+            };
+            console.log('✅ Using school primaryContact email:', emailRecipient);
+            console.log('📧 Contact Name:', emailRequest.contactName);
+            console.log('📧 School:', emailRequest.organizationName);
+          }
+        }
+        
+        // Step 4: Send email if recipient found
+        if (emailRecipient && emailRequest) {
+          console.log('📧 Sending email to:', emailRecipient);
+          const emailResult = await sendCustomPackageCreatedEmail(emailRequest, populated);
+          
+          if (emailResult.success) {
+            console.log('✅ Email sent successfully!');
+            console.log('✅ Message ID:', emailResult.messageId);
+            emailSent = true;
+          } else {
+            console.error('❌ Email sending failed:', emailResult.error || emailResult.message);
+            emailError = emailResult.error || emailResult.message || 'Email sending failed';
           }
         } else {
-          console.warn('⚠️ No customPackageRequestId provided in request body');
-          emailError = 'No customPackageRequestId provided';
+          console.warn('⚠️ No email recipient found');
+          emailError = 'No email recipient found (no customPackageRequestId, no organization primaryContact, no school primaryContact)';
         }
       } catch (error) {
         console.error('❌ Error in email sending process:', error);

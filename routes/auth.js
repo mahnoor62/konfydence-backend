@@ -1436,15 +1436,34 @@ router.get('/member/requests', authenticateToken, async (req, res) => {
     }
 
     const MemberRequest = require('../models/MemberRequest');
-    const requests = await MemberRequest.find({
-      $or: [
-        { organizationId: organization ? organization._id : null },
-        { schoolId: school ? school._id : null }
-      ],
-      status: 'pending'
-    })
-    .populate('user', 'name email createdAt')
-    .sort({ createdAt: -1 });
+    
+    // Build query - only include valid organizationId or schoolId
+    const query = { status: 'pending' };
+    const orConditions = [];
+    
+    if (organization && organization._id) {
+      orConditions.push({ organizationId: organization._id });
+    }
+    
+    if (school && school._id) {
+      orConditions.push({ schoolId: school._id });
+    }
+    
+    // Only add $or if we have at least one valid condition
+    if (orConditions.length > 0) {
+      query.$or = orConditions;
+    } else {
+      // If no valid organization or school, return empty array
+      return res.json({
+        requests: [],
+        organization: null,
+        school: null
+      });
+    }
+    
+    const requests = await MemberRequest.find(query)
+      .populate('user', 'name email createdAt')
+      .sort({ createdAt: -1 });
 
     res.json({
       requests,
