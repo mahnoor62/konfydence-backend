@@ -6,6 +6,58 @@ const Card = require('../models/Card');
 
 const router = express.Router();
 
+// Public endpoint to get available levels for a product/package
+router.get('/public/available-levels', async (req, res) => {
+  try {
+    const { packageId, productId } = req.query;
+    const Package = require('../models/Package');
+    const Product = require('../models/Product');
+    
+    const availableLevels = [];
+    
+    // Priority: productId > packageId
+    if (productId) {
+      const product = await Product.findById(productId).select('level1 level2 level3');
+      if (product) {
+        // Check each level
+        if (product.level1 && product.level1.length > 0) {
+          availableLevels.push(1);
+        }
+        if (product.level2 && product.level2.length > 0) {
+          availableLevels.push(2);
+        }
+        if (product.level3 && product.level3.length > 0) {
+          availableLevels.push(3);
+        }
+      }
+    } else if (packageId) {
+      // For packages, check if they have cards with questions
+      // Since packages don't have level-specific arrays, if package has cards, all levels are available
+      const packageDoc = await Package.findById(packageId).select('includedCardIds');
+      if (packageDoc && packageDoc.includedCardIds && packageDoc.includedCardIds.length > 0) {
+        const Card = require('../models/Card');
+        
+        // Check if package has cards with questions
+        const cardsWithQuestions = await Card.find({ 
+          _id: { $in: packageDoc.includedCardIds },
+          'question.description': { $exists: true, $ne: '' }
+        });
+        
+        // If package has cards with questions, all levels are available
+        // (since game endpoint returns same cards for all levels in packages)
+        if (cardsWithQuestions && cardsWithQuestions.length > 0) {
+          availableLevels.push(1, 2, 3);
+        }
+      }
+    }
+    
+    res.json({ availableLevels });
+  } catch (error) {
+    console.error('Error fetching available levels:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Public endpoint for game (no authentication required)
 router.get('/public/game', async (req, res) => {
   try {
