@@ -77,28 +77,33 @@ router.get('/admin/packages', authenticateToken, async (req, res) => {
     }
     
     // Build query for transactions
+    // IMPORTANT: Always filter by userId - user can only see their own transactions
     const transactionQuery = {
-      type: { $in: ['b2b_contract', 'b2e_contract'] }
+      type: { $in: ['b2b_contract', 'b2e_contract'] },
+      userId: userId // Always filter by logged-in user's ID
     };
     
+    // Also filter by organizationId/schoolId if user belongs to that organization/school
     if (organizationId) {
-      transactionQuery.$or = [
-        { organizationId: organizationId },
-        { userId: userId }
-      ];
-    }
-    if (schoolId) {
-      if (!transactionQuery.$or) transactionQuery.$or = [];
-      transactionQuery.$or.push({ schoolId: schoolId });
-      if (!transactionQuery.$or.some(q => q.userId === userId)) {
-        transactionQuery.$or.push({ userId: userId });
+      // Verify that the organizationId matches user's organization
+      const userOrgId = user.organizationId ? (typeof user.organizationId === 'object' ? user.organizationId._id : user.organizationId).toString() : null;
+      const requestedOrgId = organizationId.toString();
+      
+      if (userOrgId === requestedOrgId) {
+        transactionQuery.organizationId = organizationId;
       }
+      // If organizationId doesn't match, query will only return user's transactions (userId filter already applied)
     }
     
-    // If no organization/school, just get user's transactions
-    if (!organizationId && !schoolId) {
-      transactionQuery.userId = userId;
-      delete transactionQuery.$or;
+    if (schoolId) {
+      // Verify that the schoolId matches user's school
+      const userSchoolId = user.schoolId ? (typeof user.schoolId === 'object' ? user.schoolId._id : user.schoolId).toString() : null;
+      const requestedSchoolId = schoolId.toString();
+      
+      if (userSchoolId === requestedSchoolId) {
+        transactionQuery.schoolId = schoolId;
+      }
+      // If schoolId doesn't match, query will only return user's transactions (userId filter already applied)
     }
     
     // Fetch ALL transactions with COMPLETE population
@@ -236,12 +241,49 @@ router.get('/admin/packages', authenticateToken, async (req, res) => {
 
 router.get('/b2b-b2e', authenticateToken, checkPermission('transactions'), async (req, res) => {
   try {
-    const { organizationId, status } = req.query;
+    const { organizationId, schoolId, status } = req.query;
+    const userId = req.userId; // Get logged-in user ID
+    
+    // Get user to check their organization/school
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
     const query = {
       type: { $in: ['b2b_contract', 'b2e_contract'] }
     };
 
-    if (organizationId) query.organizationId = organizationId;
+    // IMPORTANT: Always filter by userId first - user can only see their own transactions
+    query.userId = userId;
+
+    // Also filter by organizationId/schoolId if provided AND it matches user's organization/school
+    if (organizationId) {
+      // Verify that the organizationId matches user's organization
+      const userOrgId = user.organizationId ? (typeof user.organizationId === 'object' ? user.organizationId._id : user.organizationId).toString() : null;
+      const requestedOrgId = organizationId.toString();
+      
+      if (userOrgId === requestedOrgId) {
+        query.organizationId = organizationId;
+      } else {
+        // If organizationId doesn't match user's organization, only return user's transactions
+        // Don't add organizationId to query
+      }
+    }
+    
+    if (schoolId) {
+      // Verify that the schoolId matches user's school
+      const userSchoolId = user.schoolId ? (typeof user.schoolId === 'object' ? user.schoolId._id : user.schoolId).toString() : null;
+      const requestedSchoolId = schoolId.toString();
+      
+      if (userSchoolId === requestedSchoolId) {
+        query.schoolId = schoolId;
+      } else {
+        // If schoolId doesn't match user's school, only return user's transactions
+        // Don't add schoolId to query
+      }
+    }
+    
     if (status) query.status = status;
 
     const transactions = await Transaction.find(query)
