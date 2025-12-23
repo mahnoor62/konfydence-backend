@@ -1056,11 +1056,205 @@ const sendMembershipTerminationEmail = async (member, organizationName, schoolNa
   }
 };
 
+const sendOrganizationCreatedEmail = async (user, organization, password) => {
+  try {
+    // Check if email service is configured
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.warn('Email service not configured. Skipping organization creation email.');
+      return { success: false, message: 'Email service not configured' };
+    }
+
+    const transporter = createTransporter();
+    const loginUrl = `${process.env.FRONTEND_URL}/login`;
+    
+    const organizationTypeLabels = {
+      company: 'Company',
+      bank: 'Bank',
+      school: 'School',
+      govt: 'Government',
+      other: organization.customType || 'Other'
+    };
+
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your Organization Has Been Created</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: ${colors.background};">
+  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: ${colors.background}; padding: 20px;">
+    <tr>
+      <td align="center" style="padding: 20px 0;">
+        <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: ${colors.white}; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%); padding: 30px; text-align: center;">
+              <h1 style="margin: 0; color: ${colors.white}; font-size: 28px; font-weight: 700;">Konfydence</h1>
+              <p style="margin: 5px 0 0 0; color: ${colors.accent}; font-size: 14px; font-weight: 500;">Safer Digital Decisions</p>
+            </td>
+          </tr>
+          
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px 30px;">
+              <h2 style="margin: 0 0 20px 0; color: ${colors.primary}; font-size: 24px; font-weight: 700;">Your Organization Has Been Created</h2>
+              
+              <p style="margin: 0 0 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">
+                Dear ${user.name},
+              </p>
+              
+              <p style="margin: 0 0 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">
+                We're excited to inform you that your organization <strong>${organization.name}</strong> has been successfully created in the Konfydence platform.
+              </p>
+              
+              <!-- Organization Details -->
+              <div style="background-color: ${colors.background}; padding: 20px; border-radius: 6px; margin: 20px 0;">
+                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">Organization Details</h3>
+                <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Organization Name:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${organization.name}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Type:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${organizationTypeLabels[organization.type]}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Segment:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${organization.segment}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Status:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px; text-transform: capitalize;">${organization.status}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Unique Code:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.primary}; font-size: 16px; font-weight: 600; font-family: 'Courier New', monospace; letter-spacing: 1px;">${organization.uniqueCode || 'N/A'}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Primary Contact:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${organization.primaryContact.name} (${organization.primaryContact.email})</td>
+                  </tr>
+                </table>
+              </div>
+              
+              <!-- Login Credentials -->
+              <div style="background-color: #FFF9E6; border-left: 4px solid ${colors.accent}; padding: 20px; margin: 20px 0; border-radius: 4px;">
+                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">Your Login Credentials</h3>
+                <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Email:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${user.email}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Password:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.primary}; font-size: 16px; font-weight: 600; font-family: monospace; letter-spacing: 1px;">${password}</td>
+                  </tr>
+                </table>
+                <p style="margin: 15px 0 0 0; color: #666666; font-size: 12px; line-height: 1.5;">
+                  ⚠️ Please keep these credentials secure. We recommend changing your password after your first login.
+                </p>
+              </div>
+              
+              <!-- Login Instructions -->
+              <div style="background-color: #E8F5E9; border-left: 4px solid #28A745; padding: 20px; margin: 20px 0; border-radius: 4px;">
+                <h3 style="margin: 0 0 10px 0; color: ${colors.primary}; font-size: 16px; font-weight: 600;">Next Steps</h3>
+                <p style="margin: 0 0 10px 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                  To access your organization account, please follow these steps:
+                </p>
+                <ol style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
+                  <li>Click the "Login" button below to access your account</li>
+                  <li>Enter your email and password (provided above)</li>
+                  <li>After logging in, you'll have access to your organization dashboard</li>
+                  <li>We recommend changing your password after your first login for security</li>
+                </ol>
+              </div>
+              
+              <!-- Login Button -->
+              <table role="presentation" style="width: 100%; margin: 30px 0; border-collapse: collapse;">
+                <tr>
+                  <td align="center" style="padding: 20px 0;">
+                    <a href="${loginUrl}" style="display: inline-block; background-color: ${colors.secondary}; color: ${colors.white}; padding: 14px 30px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">Login to Your Account</a>
+                  </td>
+                </tr>
+              </table>
+              
+              <p style="margin: 0 0 10px 0; color: #666666; font-size: 14px; line-height: 1.6;">
+                Or visit: <a href="${loginUrl}" style="color: ${colors.secondary}; word-break: break-all;">${loginUrl}</a>
+              </p>
+              
+              <p style="margin: 20px 0 0 0; color: #666666; font-size: 14px; line-height: 1.6;">
+                If you have any questions or need assistance, please don't hesitate to contact our support team.
+              </p>
+              
+              <div style="border-top: 2px solid #F5F8FB; padding-top: 20px; margin-top: 30px;">
+                <p style="margin: 0; color: ${colors.secondary}; font-size: 14px; font-weight: 600;">
+                  Best regards,<br>
+                  The Konfydence Team
+                </p>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color: ${colors.primary}; padding: 20px 30px; text-align: center; border-radius: 0 0 8px 8px;">
+              <p style="margin: 0; color: ${colors.white}; font-size: 12px;">
+                © 2025 Konfydence. All rights reserved.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `;
+
+    const mailOptions = {
+      from: `"Konfydence" <${process.env.SMTP_USER}>`,
+      to: user.email,
+      subject: `Your Organization Has Been Created - ${organization.name}`,
+      html: htmlContent,
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+
+    console.log('Organization creation email sent successfully:', {
+      messageId: info.messageId,
+      to: user.email,
+      organizationName: organization.name,
+      accepted: info.accepted,
+      rejected: info.rejected
+    });
+
+    return { 
+      success: true, 
+      messageId: info.messageId,
+      accepted: info.accepted,
+      rejected: info.rejected
+    };
+  } catch (error) {
+    console.error('Error sending organization creation email:', {
+      error: error.message,
+      stack: error.stack,
+      to: user?.email,
+      organizationName: organization?.name,
+      smtpUser: process.env.SMTP_USER ? 'Set' : 'Missing',
+      smtpPass: process.env.SMTP_PASS ? 'Set' : 'Missing',
+      smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com'
+    });
+    return { success: false, error: error.message };
+  }
+};
+
 module.exports = {
   sendStatusUpdateEmail,
   sendCustomPackageCreatedEmail,
   sendTransactionSuccessEmail,
   sendMembershipTerminationEmail,
+  sendOrganizationCreatedEmail,
   createTransporter,
 };
 

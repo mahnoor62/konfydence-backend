@@ -5,6 +5,37 @@ const BlogPost = require('../models/BlogPost');
 
 const router = express.Router();
 
+// Helper function to generate slug from title
+const generateSlug = (title) => {
+  return title
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, '') // Remove special characters
+    .replace(/[\s_-]+/g, '-') // Replace spaces and underscores with hyphens
+    .replace(/^-+|-+$/g, ''); // Remove leading/trailing hyphens
+};
+
+// Helper function to ensure unique slug
+const ensureUniqueSlug = async (baseSlug, excludeId = null) => {
+  let slug = baseSlug;
+  let counter = 1;
+  
+  while (true) {
+    const query = { slug };
+    if (excludeId) {
+      query._id = { $ne: excludeId };
+    }
+    
+    const existing = await BlogPost.findOne(query);
+    if (!existing) {
+      return slug;
+    }
+    
+    slug = `${baseSlug}-${counter}`;
+    counter++;
+  }
+};
+
 
 router.get('/', async (req, res) => {
   try {
@@ -82,7 +113,6 @@ router.post(
   authenticateToken,
   [
     body('title').notEmpty().withMessage('Post title is required'),
-    body('slug').notEmpty().withMessage('Post slug is required'),
     body('excerpt').notEmpty().withMessage('Post excerpt is required'),
     body('content').notEmpty().withMessage('Post content is required')
   ],
@@ -96,6 +126,15 @@ router.post(
 
       if (!req.body.category) {
         return res.status(400).json({ error: 'Post category is required' });
+      }
+
+      // Auto-generate slug from title if not provided
+      if (!req.body.slug || !req.body.slug.trim()) {
+        const baseSlug = generateSlug(req.body.title);
+        req.body.slug = await ensureUniqueSlug(baseSlug);
+      } else {
+        // If slug is provided, ensure it's unique
+        req.body.slug = await ensureUniqueSlug(req.body.slug);
       }
 
       if (req.body.isPublished && !req.body.publishedAt) {
@@ -123,7 +162,6 @@ router.put(
   authenticateToken,
   [
     body('title').optional().notEmpty().withMessage('Post title cannot be empty'),
-    body('slug').optional().notEmpty().withMessage('Post slug cannot be empty'),
     body('excerpt').optional().notEmpty().withMessage('Post excerpt cannot be empty'),
     body('content').optional().notEmpty().withMessage('Post content cannot be empty')
   ],
@@ -133,6 +171,15 @@ router.put(
       if (!errors.isEmpty()) {
         const errorMessages = errors.array().map(err => err.msg).join(', ');
         return res.status(400).json({ error: errorMessages, errors: errors.array() });
+      }
+
+      // Auto-generate slug from title if title is being updated and slug is not provided
+      if (req.body.title && (!req.body.slug || !req.body.slug.trim())) {
+        const baseSlug = generateSlug(req.body.title);
+        req.body.slug = await ensureUniqueSlug(baseSlug, req.params.id);
+      } else if (req.body.slug && req.body.slug.trim()) {
+        // If slug is provided, ensure it's unique (excluding current post)
+        req.body.slug = await ensureUniqueSlug(req.body.slug, req.params.id);
       }
 
       if (req.body.isPublished && !req.body.publishedAt) {

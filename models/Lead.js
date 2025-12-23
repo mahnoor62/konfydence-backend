@@ -14,10 +14,6 @@ const LeadSchema = new Schema(
       lowercase: true,
       trim: true
     },
-    phone: {
-      type: String,
-      trim: true
-    },
     organizationName: {
       type: String,
       trim: true
@@ -47,7 +43,38 @@ const LeadSchema = new Schema(
       type: Date,
       comment: 'Last time lead was contacted'
     },
-    // Demo tracking
+    // Demo tracking with status
+    demoStatus: {
+      type: String,
+      enum: ['none', 'requested', 'scheduled', 'completed', 'no_show'],
+      default: 'none'
+    },
+    demoScheduledAt: {
+      type: Date
+    },
+    demoCompletedAt: {
+      type: Date
+    },
+    linkedTrialIds: [{
+      type: Schema.Types.ObjectId,
+      ref: 'FreeTrial'
+    }],
+    // Quote/Pricing with status
+    quoteStatus: {
+      type: String,
+      enum: ['none', 'requested', 'sent', 'accepted', 'lost'],
+      default: 'none'
+    },
+    quoteRequestedAt: {
+      type: Date
+    },
+    quoteSentAt: {
+      type: Date
+    },
+    quoteAcceptedAt: {
+      type: Date
+    },
+    // Legacy fields for backward compatibility
     demoRequested: {
       type: Boolean,
       default: false
@@ -56,17 +83,9 @@ const LeadSchema = new Schema(
       type: Boolean,
       default: false
     },
-    linkedTrialIds: [{
-      type: Schema.Types.ObjectId,
-      ref: 'FreeTrial'
-    }],
-    // Quote/Pricing
     quoteRequested: {
       type: Boolean,
       default: false
-    },
-    quoteRequestedAt: {
-      type: Date
     },
     // Decision maker info
     isDecisionMaker: {
@@ -102,6 +121,96 @@ const LeadSchema = new Schema(
         default: Date.now
       }
     }],
+    // Engagement tracking - detailed interactions
+    engagements: [{
+      type: {
+        type: String,
+        enum: ['call', 'email', 'meeting', 'other'],
+        required: true
+      },
+      summary: {
+        type: String,
+        required: true,
+        trim: true
+      },
+      createdBy: {
+        type: Schema.Types.ObjectId,
+        ref: 'Admin',
+        required: true
+      },
+      createdAt: {
+        type: Date,
+        default: Date.now
+      }
+    }],
+    // Timeline - auto-logged activities
+    timeline: [{
+      eventType: {
+        type: String,
+        enum: [
+          'created',
+          'status_changed',
+          'demo_requested',
+          'demo_scheduled',
+          'demo_completed',
+          'demo_no_show',
+          'quote_requested',
+          'quote_sent',
+          'quote_accepted',
+          'quote_lost',
+          'note_added',
+          'engagement_logged',
+          'converted'
+        ],
+        required: true
+      },
+      description: {
+        type: String,
+        required: true
+      },
+      metadata: {
+        type: Schema.Types.Mixed,
+        default: {}
+      },
+      createdBy: {
+        type: Schema.Types.ObjectId,
+        ref: 'Admin'
+      },
+      createdAt: {
+        type: Date,
+        default: Date.now
+      }
+    }],
+    // Compliance tags for audit readiness
+    complianceTags: [{
+      type: String,
+      enum: [
+        'NIS2',
+        'Security Awareness',
+        'Human Risk',
+        'Social Engineering',
+        'Incident Response',
+        'Management Training',
+        'ISO 27001',
+        'Awareness',
+        'Leadership'
+      ]
+    }],
+    // Engagement evidence for audit
+    engagementEvidence: {
+      type: String,
+      trim: true,
+      comment: 'Notes from workshops/sessions for audit purposes'
+    },
+    evidenceDate: {
+      type: Date,
+      comment: 'Date when evidence was documented'
+    },
+    facilitator: {
+      type: String,
+      trim: true,
+      comment: 'Name of facilitator for sessions'
+    },
     // Conversion tracking
     convertedOrganizationId: {
       type: Schema.Types.ObjectId,

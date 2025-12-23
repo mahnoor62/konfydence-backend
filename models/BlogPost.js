@@ -10,7 +10,19 @@ const BlogPostSchema = new Schema(
     featuredImage: { type: String },
     category: {
       type: String,
-      enum: ['for-families', 'for-companies', 'for-schools', 'news', 'how-to'],
+      enum: [
+        'for-families', 
+        'for-companies', 
+        'for-schools', 
+        'news', 
+        'how-to',
+        'kids-program',
+        'charity-model',
+        'auditors',
+        'nis2',
+        'comasi',
+        'b2b-sales'
+      ],
       required: true,
       default: 'news'
     },

@@ -396,5 +396,122 @@ router.delete('/:id', authenticateToken, checkPermission('organizations'), async
   }
 });
 
+// Export organization data for auditors (CSV format)
+router.get('/:id/export', authenticateToken, checkPermission('organizations'), async (req, res) => {
+  try {
+    const Lead = require('../models/Lead');
+    const CustomPackage = require('../models/CustomPackage');
+    
+    const organization = await Organization.findById(req.params.id)
+      .populate('customPackages', 'name description contract');
+
+    if (!organization) {
+      return res.status(404).json({ error: 'Organization not found' });
+    }
+
+    // Get all leads converted to this organization
+    const leads = await Lead.find({ convertedOrganizationId: req.params.id })
+      .select('complianceTags engagementEvidence evidenceDate facilitator createdAt');
+
+    // Get active packages
+    const activePackages = (organization.customPackages || []).filter(pkg => 
+      pkg.contract && pkg.contract.status === 'active'
+    );
+
+    // Convert to CSV format
+    const csvRows = [];
+    
+    // Header row
+    csvRows.push([
+      'Field',
+      'Value'
+    ].join(','));
+
+    // Organization Information
+    csvRows.push(['Organization Name', `"${organization.name || ''}"`].join(','));
+    csvRows.push(['Organization Type', `"${organization.type || ''}"`].join(','));
+    csvRows.push(['Segment', `"${organization.segment || ''}"`].join(','));
+    csvRows.push(['Status', `"${organization.status || ''}"`].join(','));
+    csvRows.push(['Created At', `"${organization.createdAt ? new Date(organization.createdAt).toISOString() : ''}"`].join(','));
+
+    // Session Dates and Evidence Notes
+    csvRows.push(['', '']); // Empty row
+    csvRows.push(['Training Sessions', '']); // Header
+    
+    const sessions = [];
+    leads.forEach((lead, idx) => {
+      if (lead.evidenceDate || lead.engagementEvidence) {
+        sessions.push({
+          date: lead.evidenceDate,
+          evidence: lead.engagementEvidence,
+          facilitator: lead.facilitator,
+          createdAt: lead.createdAt
+        });
+      }
+    });
+
+    if (sessions.length > 0) {
+      sessions.forEach((session, idx) => {
+        csvRows.push([
+          `Session ${idx + 1} Date`,
+          `"${session.date ? new Date(session.date).toISOString() : (session.createdAt ? new Date(session.createdAt).toISOString() : '')}"`
+        ].join(','));
+        csvRows.push([
+          `Session ${idx + 1} Evidence Notes`,
+          `"${(session.evidence || '').replace(/"/g, '""')}"`
+        ].join(','));
+        csvRows.push([
+          `Session ${idx + 1} Facilitator`,
+          `"${session.facilitator || ''}"`
+        ].join(','));
+        csvRows.push(['', '']); // Empty row between sessions
+      });
+    } else {
+      csvRows.push(['No Sessions Documented', '']); // Empty row
+    }
+
+    // Compliance Tags (aggregated from all leads)
+    csvRows.push(['', '']); // Empty row
+    csvRows.push(['Compliance Tags', '']); // Header
+    
+    const allComplianceTags = new Set();
+    leads.forEach(lead => {
+      if (lead.complianceTags && lead.complianceTags.length > 0) {
+        lead.complianceTags.forEach(tag => allComplianceTags.add(tag));
+      }
+    });
+
+    if (allComplianceTags.size > 0) {
+      csvRows.push(['Tags', `"${Array.from(allComplianceTags).join('; ')}"`].join(','));
+    } else {
+      csvRows.push(['No Compliance Tags', '']); // Empty row
+    }
+
+    // Active Packages
+    csvRows.push(['', '']); // Empty row
+    csvRows.push(['Active Packages', '']); // Header
+    
+    if (activePackages.length > 0) {
+      activePackages.forEach((pkg, idx) => {
+        csvRows.push([
+          `Package ${idx + 1}`,
+          `"${pkg.name || ''} - ${pkg.description || ''}"`
+        ].join(','));
+      });
+    } else {
+      csvRows.push(['No Active Packages', '']); // Empty row
+    }
+
+    const csvContent = csvRows.join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="organization-${organization.name}-${new Date().toISOString().split('T')[0]}.csv"`);
+    res.send(csvContent);
+  } catch (error) {
+    console.error('Error exporting organization:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;
 

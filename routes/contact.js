@@ -33,7 +33,6 @@ router.post(
           const leadData = {
             name: req.body.name,
             email: req.body.email,
-            phone: req.body.phone || '',
             organizationName: req.body.company || '',
             segment: segment,
             source: source,
@@ -56,7 +55,6 @@ router.post(
           const leadData = {
             name: req.body.name,
             email: req.body.email,
-            phone: req.body.phone || '',
             organizationName: req.body.company || '',
             segment: 'other',
             source: 'contact_form',

@@ -889,6 +889,16 @@ router.post(
         });
       }
 
+      // Check if password is not set (user created from lead conversion)
+      if (!user.passwordHash || user.passwordHash === 'NO_PASSWORD_SET') {
+        return res.status(403).json({ 
+          error: 'Password not set. Please reset your password to continue.',
+          errorCode: 'PASSWORD_NOT_SET',
+          requiresPasswordReset: true,
+          passwordResetToken: user.passwordResetToken || null
+        });
+      }
+
       const isValid = await bcrypt.compare(password, user.passwordHash);
       if (!isValid) {
         return res.status(401).json({ 
