@@ -36,14 +36,95 @@ router.post(
         return res.status(401).json({ error: 'User not found' });
       }
 
-      // Prepare request data with organizationId/schoolId
+      // Check for duplicate request - same organization name or organizationId
+      const orgId = user.organizationId || req.body.organizationId;
+      const query = {
+        status: { $in: ['pending', 'reviewing', 'approved'] }
+      };
+      
+      // Check by organizationId first (more reliable)
+      if (orgId) {
+        query.organizationId = orgId;
+      } else {
+        // Fallback to organization name (case-insensitive)
+        query.organizationName = new RegExp(`^${req.body.organizationName}$`, 'i');
+      }
+      
+      const existingRequest = await CustomPackageRequest.findOne(query);
+
+      if (existingRequest) {
+        return res.status(400).json({ 
+          error: 'You have already submitted a custom package request. Please wait for the existing request to be processed.' 
+        });
+      }
+
+      // Handle both old format (numberOfSeats, pricingRequirements, message) and new format (requestedModifications)
+      const requestedMods = req.body.requestedModifications || {};
+      
+      // Map old field names to new structure if needed
+      const seatLimit = requestedMods.seatLimit !== undefined 
+        ? requestedMods.seatLimit 
+        : (req.body.numberOfSeats !== undefined ? req.body.numberOfSeats : undefined);
+      
+      const additionalNotes = requestedMods.additionalNotes !== undefined
+        ? requestedMods.additionalNotes
+        : (req.body.message !== undefined ? req.body.message : '');
+      
+      const customPricingNotes = requestedMods.customPricing?.notes !== undefined
+        ? requestedMods.customPricing.notes
+        : (req.body.pricingRequirements !== undefined ? req.body.pricingRequirements : '');
+
+      // ALWAYS build requestedModifications structure with ALL fields
+      const requestedModifications = {
+        cardsToAdd: Array.isArray(requestedMods.cardsToAdd) ? requestedMods.cardsToAdd : [],
+        cardsToRemove: Array.isArray(requestedMods.cardsToRemove) ? requestedMods.cardsToRemove : []
+      };
+      
+      // ALWAYS include seatLimit if provided (even if 0)
+      if (seatLimit !== undefined && seatLimit !== null && seatLimit !== '') {
+        const seatLimitNum = Number(seatLimit);
+        if (!isNaN(seatLimitNum)) {
+          requestedModifications.seatLimit = seatLimitNum;
+        }
+      }
+      
+      // ALWAYS include additionalNotes (even if empty string)
+      requestedModifications.additionalNotes = additionalNotes !== undefined 
+        ? String(additionalNotes) 
+        : '';
+      
+      // ALWAYS include customPricing structure with notes
+      requestedModifications.customPricing = {
+        currency: requestedMods.customPricing?.currency || 'EUR',
+        notes: customPricingNotes !== undefined ? String(customPricingNotes) : ''
+      };
+      
+      // Include other optional fields if present
+      if (requestedMods.contractDuration) {
+        requestedModifications.contractDuration = requestedMods.contractDuration;
+      }
+
+      // Prepare request data with organizationId/schoolId and our cleaned requestedModifications
       const requestData = {
-        ...req.body,
+        entityType: req.body.entityType || undefined,
+        productId: req.body.productId || undefined,
+        organizationName: req.body.organizationName,
+        contactName: req.body.contactName,
+        contactEmail: req.body.contactEmail,
+        contactPhone: req.body.contactPhone || '',
         organizationId: user.organizationId || req.body.organizationId || null,
-        schoolId: user.schoolId || req.body.schoolId || null
+        schoolId: user.schoolId || req.body.schoolId || null,
+        requestedModifications: requestedModifications
       };
 
+      console.log('📥 Received request body:', JSON.stringify(req.body, null, 2));
+      console.log('📥 Creating custom package request with data:', JSON.stringify(requestData, null, 2));
+      console.log('📥 requestedModifications structure:', JSON.stringify(requestData.requestedModifications, null, 2));
+
       const request = await CustomPackageRequest.create(requestData);
+      
+      console.log('✅ Created custom package request:', request._id);
+      console.log('📊 Request details:', JSON.stringify(request.requestedModifications, null, 2));
       const populated = await CustomPackageRequest.findById(request._id)
         .populate('organizationId', 'name uniqueCode')
         .populate('schoolId', 'name uniqueCode')

@@ -8,7 +8,18 @@ const ContactMessageSchema = new Schema(
     company: { type: String },
     topic: {
       type: String,
-      enum: ['b2b_demo', 'b2c_question', 'education', 'other'],
+      enum: [
+        'b2b_demo',
+        'b2c_question',
+        'education',
+        'other',
+        'scam-survival-kit',
+        'education-youth-pack',
+        'comasy',
+        'nis2-audit',
+        'partnerships',
+        'media-press'
+      ],
       required: true
     },
     message: { type: String, required: true },

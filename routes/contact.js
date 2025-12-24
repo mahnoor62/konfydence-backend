@@ -11,9 +11,20 @@ router.post(
   [
     body('name').notEmpty(),
     body('email').isEmail(),
-    body('topic').isIn(['b2b_demo', 'b2c_question', 'education', 'other']),
+    body('topic').isIn([
+      'b2b_demo',
+      'b2c_question',
+      'education',
+      'other',
+      'scam-survival-kit',
+      'education-youth-pack',
+      'comasy',
+      'nis2-audit',
+      'partnerships',
+      'media-press'
+    ]),
     body('message').notEmpty()
-  ],
+  ], // Validation updated
   async (req, res) => {
     try {
       const errors = validationResult(req);
@@ -23,13 +34,16 @@ router.post(
 
       // Create contact message
       const message = await ContactMessage.create(req.body);
-      
+
       // Also create unified Lead record if it's a B2B demo or education inquiry
-      if (req.body.topic === 'b2b_demo' || req.body.topic === 'education') {
+      const isB2B = ['b2b_demo', 'comasy', 'nis2-audit'].includes(req.body.topic);
+      const isEducation = ['education', 'education-youth-pack'].includes(req.body.topic);
+
+      if (isB2B || isEducation) {
         try {
-          const segment = req.body.topic === 'b2b_demo' ? 'B2B' : 'B2E';
-          const source = req.body.topic === 'b2b_demo' ? 'b2b_form' : 'b2e_form';
-          
+          const segment = isB2B ? 'B2B' : 'B2E';
+          const source = isB2B ? 'b2b_form' : 'b2e_form';
+
           const leadData = {
             name: req.body.name,
             email: req.body.email,
@@ -38,9 +52,9 @@ router.post(
             source: source,
             status: 'new',
             engagementCount: 0, // Start with 0, will be warm if demo requested
-            demoRequested: req.body.topic === 'b2b_demo' // Mark as demo requested if B2B demo
+            demoRequested: isB2B // Mark as demo requested if B2B/Comasy related
           };
-          
+
           const lead = await Lead.create(leadData);
           // Auto-calculate status (will be warm if demoRequested, otherwise new)
           lead.status = lead.calculateStatus();
@@ -61,7 +75,7 @@ router.post(
             status: 'new',
             engagementCount: 0 // Start as new lead
           };
-          
+
           const lead = await Lead.create(leadData);
           // Auto-calculate status (will be new for general contact)
           lead.status = lead.calculateStatus();
@@ -71,10 +85,12 @@ router.post(
           // Don't fail the request if unified lead creation fails
         }
       }
-      
+
+      console.log('✅ Contact message created:', message._id);
       res.status(201).json(message);
     } catch (error) {
-      res.status(500).json({ error: 'Server error' });
+      console.error('❌ Error in contact POST route:', error);
+      res.status(500).json({ error: error.message || 'Server error', details: error.toString() });
     }
   }
 );
@@ -100,7 +116,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
     }
     res.json(message);
   } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -119,8 +135,3 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 module.exports = router;
-
-
-
-
-
