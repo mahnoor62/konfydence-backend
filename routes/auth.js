@@ -1193,16 +1193,50 @@ router.post('/user/forgot-password', async (req, res) => {
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Reset Your Password</title>
 </head>
-<body style="font-family: Arial, sans-serif; background-color: #F5F8FB; padding: 20px;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #FFFFFF; border-radius: 8px; padding: 30px;">
-    <h2 style="color: #063C5E;">Reset Your Password</h2>
-    <p>You requested to reset your password. Click the button below to reset it:</p>
-    <a href="${resetUrl}" style="display: inline-block; background-color: #0B7897; color: #FFFFFF; padding: 14px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0;">Reset Password</a>
-    <p style="color: #666666; font-size: 14px;">Or copy this link: ${resetUrl}</p>
-    <p style="color: #666666; font-size: 14px;">This link expires in 1 hour. If you didn't request this, please ignore this email.</p>
-  </div>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #F5F8FB;">
+  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #F5F8FB; padding: 20px;">
+    <tr>
+      <td align="center" style="padding: 20px 0;">
+        <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: #FFFFFF; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <tr>
+            <td style="background: linear-gradient(135deg, #063C5E 0%, #0B7897 100%); padding: 30px; text-align: center;">
+              <h1 style="margin: 0; color: #FFFFFF; font-size: 28px; font-weight: 700;">Konfydence</h1>
+              <p style="margin: 5px 0 0 0; color: #FFD700; font-size: 14px; font-weight: 500;">Safer Digital Decisions</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 40px 30px;">
+              <h2 style="margin: 0 0 20px 0; color: #063C5E; font-size: 24px; font-weight: 700;">Reset Your Password</h2>
+              <p style="margin: 0 0 20px 0; color: #333333; font-size: 16px; line-height: 1.6;">
+                You requested to reset your password. Click the button below to reset it:
+              </p>
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${resetUrl}" style="display: inline-block; background-color: #0B7897; color: #FFFFFF; padding: 14px 30px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">Reset Password</a>
+              </div>
+              <p style="margin: 20px 0 10px 0; color: #666666; font-size: 14px; line-height: 1.6;">
+                Or copy this link:
+              </p>
+              <p style="margin: 0 0 20px 0; color: #0B7897; font-size: 13px; word-break: break-all; line-height: 1.6;">
+                ${resetUrl}
+              </p>
+              <div style="background-color: #FFF3CD; border-left: 4px solid #FFC107; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                <p style="margin: 0; color: #856404; font-size: 14px; line-height: 1.6;">
+                  ⚠️ This link expires in 1 hour. If you didn't request this, please ignore this email.
+                </p>
+              </div>
+              <p style="margin: 30px 0 0 0; color: #666666; font-size: 14px; line-height: 1.6;">
+                Best regards,<br>
+                The Konfydence Team
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>
       `;
@@ -1213,7 +1247,8 @@ router.post('/user/forgot-password', async (req, res) => {
           from: `"Konfydence" <${process.env.SMTP_USER}>`,
           to: email,
           subject: 'Reset Your Password - Konfydence',
-          html: emailHtml
+          html: emailHtml,
+          text: `Reset Your Password - Konfydence\n\nYou requested to reset your password. Click the link below to reset it:\n\n${resetUrl}\n\nThis link expires in 1 hour. If you didn't request this, please ignore this email.\n\nBest regards,\nThe Konfydence Team`
         });
       }
     } catch (emailError) {
