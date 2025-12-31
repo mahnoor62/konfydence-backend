@@ -18,6 +18,26 @@ const LeadSchema = new Schema(
       type: String,
       trim: true
     },
+    teamSize: {
+      type: String,
+      trim: true,
+      comment: 'Team size from contact form (e.g., for CoMaSy demos)'
+    },
+    studentStaffSize: {
+      type: String,
+      trim: true,
+      comment: 'Student/Staff size from education contact form (for B2E leads)'
+    },
+    message: {
+      type: String,
+      trim: true,
+      comment: 'Original message from contact form'
+    },
+    topic: {
+      type: String,
+      trim: true,
+      comment: 'Original topic selected in contact form (e.g., comasy, education-youth-pack, nis2-audit)'
+    },
     segment: {
       type: String,
       enum: ['B2B', 'B2E', 'other'],

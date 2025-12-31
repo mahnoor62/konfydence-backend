@@ -23,7 +23,7 @@ router.post(
       'partnerships',
       'media-press'
     ]),
-    body('message').notEmpty()
+    body('message').optional()
   ], // Validation updated
   async (req, res) => {
     try {
@@ -32,58 +32,128 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
+      // Log received topic value for debugging
+      console.log('📥 Received contact form data:', {
+        topic: req.body.topic,
+        name: req.body.name,
+        email: req.body.email,
+        fullBody: req.body
+      });
+
+      // Check if a lead with this email already exists (before creating contact message)
+      const existingLead = await Lead.findOne({ email: req.body.email.toLowerCase().trim() });
+      
+      if (existingLead) {
+        console.log('⚠️ Duplicate contact attempt:', {
+          email: req.body.email,
+          existingLeadId: existingLead._id,
+          existingSource: existingLead.source
+        });
+        return res.status(400).json({ 
+          error: 'You have already contacted us. Our team will get back to you soon.',
+          duplicate: true
+        });
+      }
+
       // Create contact message
       const message = await ContactMessage.create(req.body);
 
-      // Also create unified Lead record if it's a B2B demo or education inquiry
-      const isB2B = ['b2b_demo', 'comasy', 'nis2-audit'].includes(req.body.topic);
-      const isEducation = ['education', 'education-youth-pack'].includes(req.body.topic);
+      console.log('✅ Contact message created with topic:', message.topic);
 
-      if (isB2B || isEducation) {
-        try {
-          const segment = isB2B ? 'B2B' : 'B2E';
-          const source = isB2B ? 'b2b_form' : 'b2e_form';
+      // Map topic to segment based on what user selected
+      // Educational topics → B2E
+      // Company/Business topics → B2B
+      // All other topics → 'other'
+      const topicToSegmentMap = {
+        // Educational Institute topics → B2E
+        'education': 'B2E',
+        'education-youth-pack': 'B2E',
+        
+        // Company/Business topics → B2B
+        'b2b_demo': 'B2B',
+        'comasy': 'B2B',
+        'nis2-audit': 'B2B',
+        
+        // All other topics → 'other'
+        'scam-survival-kit': 'other',
+        'b2c_question': 'other',
+        'partnerships': 'other',
+        'media-press': 'other',
+        'other': 'other'
+      };
+
+      // Always create unified Lead record for all contact form submissions
+      try {
+        // Get segment from topic mapping, with fallback to 'other' if topic not found
+        const segment = topicToSegmentMap[req.body.topic] || 'other';
+        
+        // Determine source based on topic
+        // B2B topics (comasy, b2b_demo, nis2-audit) should use 'b2b_form'
+        // B2E topics (education, education-youth-pack) should use 'b2e_form'
+        // All others use 'contact_form'
+        let source = 'contact_form';
+        if (['comasy', 'b2b_demo', 'nis2-audit'].includes(req.body.topic)) {
+          source = 'b2b_form';
+        } else if (['education', 'education-youth-pack'].includes(req.body.topic)) {
+          source = 'b2e_form';
+        }
+
+        console.log('📝 Creating lead from contact form:', {
+          topic: req.body.topic,
+          mappedSegment: segment,
+          source: source,
+          name: req.body.name,
+          email: req.body.email
+        });
+
+        // Ensure segment is valid (required field in Lead schema)
+        if (!segment) {
+          console.error('❌ Invalid segment for topic:', req.body.topic);
+          throw new Error(`Invalid segment mapping for topic: ${req.body.topic}`);
+        }
 
           const leadData = {
             name: req.body.name,
             email: req.body.email,
-            organizationName: req.body.company || '',
+          organizationName: req.body.organization || req.body.company || '',
+          topic: req.body.topic, // Store original topic for reference
             segment: segment,
             source: source,
             status: 'new',
-            engagementCount: 0, // Start with 0, will be warm if demo requested
-            demoRequested: isB2B // Mark as demo requested if B2B/Comasy related
-          };
+          engagementCount: 0,
+          demoRequested: ['b2b_demo', 'comasy', 'nis2-audit'].includes(req.body.topic), // Mark as demo requested if B2B/Comasy related
+          teamSize: req.body.teamSize || '', // Save team size if provided (B2B)
+          studentStaffSize: req.body.studentStaffSize || '', // Save student/staff size if provided (B2E)
+          message: req.body.message || '' // Save original message
+        };
+
+        console.log('📦 Lead data to be created:', leadData);
 
           const lead = await Lead.create(leadData);
           // Auto-calculate status (will be warm if demoRequested, otherwise new)
           lead.status = lead.calculateStatus();
           await lead.save();
+        
+        console.log('✅ Unified lead created from contact form:', {
+          leadId: lead._id,
+          name: lead.name,
+          email: lead.email,
+          segment: lead.segment,
+          source: lead.source,
+          topic: req.body.topic,
+          organizationName: lead.organizationName
+        });
         } catch (unifiedError) {
-          console.error('Error creating unified lead from contact:', unifiedError);
-          // Don't fail the request if unified lead creation fails
-        }
-      } else {
-        // For other contact topics, create as 'other' segment
-        try {
-          const leadData = {
-            name: req.body.name,
-            email: req.body.email,
-            organizationName: req.body.company || '',
-            segment: 'other',
-            source: 'contact_form',
-            status: 'new',
-            engagementCount: 0 // Start as new lead
-          };
-
-          const lead = await Lead.create(leadData);
-          // Auto-calculate status (will be new for general contact)
-          lead.status = lead.calculateStatus();
-          await lead.save();
-        } catch (unifiedError) {
-          console.error('Error creating unified lead from contact:', unifiedError);
-          // Don't fail the request if unified lead creation fails
-        }
+        console.error('❌ Error creating unified lead from contact:', unifiedError);
+        console.error('Error details:', unifiedError.message, unifiedError.stack);
+          // Check if error is duplicate email (MongoDB duplicate key error)
+          if (unifiedError.code === 11000 || unifiedError.message.includes('duplicate')) {
+            return res.status(400).json({ 
+              error: 'You have already contacted us. Our team will get back to you soon.',
+              duplicate: true
+            });
+          }
+          // Don't fail the request if unified lead creation fails for other reasons
       }
 
       console.log('✅ Contact message created:', message._id);

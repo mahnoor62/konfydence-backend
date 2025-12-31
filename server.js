@@ -95,6 +95,9 @@ app.use('/api/testimonials', testimonialRoutes);
 app.use('/api/partners', partnerRoutes);
 app.use('/api/leads', leadRoutes);
 app.use('/api/contact', contactRoutes);
+app.use('/api/subscribers', require('./routes/subscribers'));
+// Keep backward compatibility
+app.use('/api/newsletter', require('./routes/subscribers'));
 app.use('/api/settings', settingsRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/game-progress', require('./routes/gameProgress'));

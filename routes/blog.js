@@ -39,7 +39,7 @@ const ensureUniqueSlug = async (baseSlug, excludeId = null) => {
 
 router.get('/', async (req, res) => {
   try {
-    const { page = 1, limit = 10, published, all, category } = req.query;
+    const { page = 1, limit = 10, published, all, category, search } = req.query;
     const query = {};
     const fetchAll = all === 'true';
     const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
@@ -54,6 +54,17 @@ router.get('/', async (req, res) => {
 
     if (category) {
       query.category = category;
+    }
+
+    // Search functionality
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(search.trim(), 'i');
+      query.$or = [
+        { title: searchRegex },
+        { excerpt: searchRegex },
+        { content: searchRegex },
+        { description: searchRegex },
+      ];
     }
 
     if (fetchAll) {
