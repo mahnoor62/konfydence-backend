@@ -1811,13 +1811,35 @@ router.post('/use-purchase-code', authenticateToken, async (req, res) => {
     }
 
     // Check if this is an individual purchase (no organization/school)
-    // Individual users can only use codes they purchased themselves
+    // Individual users can only use codes they purchased themselves, OR if they were referred by the code owner
     if (!transaction.organizationId && !transaction.schoolId) {
       const transactionUserId = transaction.userId?._id || transaction.userId;
-      if (transactionUserId && transactionUserId.toString() !== req.userId.toString()) {
-        return res.status(403).json({ 
-          error: 'This code belongs to another user. Only the user who purchased this code can use it to play the game.' 
-        });
+      const currentUserId = req.userId.toString();
+      
+      // Check if user owns the code
+      if (transactionUserId && transactionUserId.toString() !== currentUserId) {
+        // User doesn't own the code - check if they were referred by the code owner
+        const User = require('../models/User');
+        const currentUser = await User.findById(req.userId).select('referredBy');
+        
+        if (currentUser && currentUser.referredBy) {
+          const referrerId = currentUser.referredBy.toString();
+          // Check if the code owner is the referrer
+          if (transactionUserId.toString() === referrerId) {
+            // User was referred by the code owner - allow them to use the code
+            console.log(`✅ Referred user ${currentUserId} using referrer's code ${code}`);
+          } else {
+            // User was referred by someone else, not the code owner
+            return res.status(403).json({ 
+              error: 'This code belongs to another user. Only the user who purchased this code can use it to play the game.' 
+            });
+          }
+        } else {
+          // User is not referred by anyone - deny access
+          return res.status(403).json({ 
+            error: 'This code belongs to another user. Only the user who purchased this code can use it to play the game.' 
+          });
+        }
       }
     }
 
@@ -1920,17 +1942,39 @@ router.post('/use-purchase-code', authenticateToken, async (req, res) => {
       }
     }
 
+    // Check if seats are available
+    const maxSeats = transaction.maxSeats || 5;
+    const usedSeats = transaction.usedSeats || 0;
+
     // Check if this user has already played with this code
     const hasUserPlayed = transaction.gamePlays?.some(
       (play) => play.userId && play.userId.toString() === req.userId.toString()
     );
 
+    // If user has played, check if they've completed all 3 levels
     if (hasUserPlayed) {
-      return res.status(400).json({ 
-        error: 'You have already played the game with this code. Your seats are finished. You cannot play the game with any other seat.',
-        alreadyPlayed: true,
-        seatsFinished: true
-      });
+      // Check user's game progress to see if they've completed all 3 levels
+      const GameProgress = require('../models/GameProgress');
+      const userProgress = await GameProgress.find({ userId: req.userId });
+      
+      // Check if user has completed all 3 levels
+      const level1Complete = userProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
+      const level2Complete = userProgress.some(p => p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0);
+      const level3Complete = userProgress.some(p => p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0);
+      
+      const allLevelsCompleted = level1Complete && level2Complete && level3Complete;
+      
+      // If user has completed all 3 levels, they've used their seat and can't play again
+      if (allLevelsCompleted) {
+        return res.status(400).json({ 
+          error: 'You have already completed all levels with this code. Your seat has been used.',
+          alreadyPlayed: true,
+          seatsFinished: true
+        });
+      }
+      
+      // If user has played but not completed all levels, allow resume (seat not used yet)
+      // This allows users to resume their game until they complete all 3 levels
     }
 
     // Track code application (for statistics)
@@ -2054,12 +2098,30 @@ router.post('/start-purchase-game-play', authenticateToken, async (req, res) => 
       (play) => play.userId && play.userId.toString() === req.userId.toString()
     );
 
+    // If user has played, check if they've completed all 3 levels
     if (hasUserPlayed) {
-      return res.status(400).json({ 
-        error: 'You have already played the game with this code. Your seats are finished. You cannot play the game with any other seat.',
-        alreadyPlayed: true,
-        seatsFinished: true
-      });
+      // Check user's game progress to see if they've completed all 3 levels
+      const GameProgress = require('../models/GameProgress');
+      const userProgress = await GameProgress.find({ userId: req.userId });
+      
+      // Check if user has completed all 3 levels
+      const level1Complete = userProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
+      const level2Complete = userProgress.some(p => p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0);
+      const level3Complete = userProgress.some(p => p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0);
+      
+      const allLevelsCompleted = level1Complete && level2Complete && level3Complete;
+      
+      // If user has completed all 3 levels, they've used their seat and can't play again
+      if (allLevelsCompleted) {
+        return res.status(400).json({ 
+          error: 'You have already completed all levels with this code. Your seat has been used.',
+          alreadyPlayed: true,
+          seatsFinished: true
+        });
+      }
+      
+      // If user has played but not completed all levels, allow resume (seat not used yet)
+      // This allows users to resume their game until they complete all 3 levels
     }
 
     // CRITICAL: Check if cards are available before incrementing seats
@@ -2099,19 +2161,22 @@ router.post('/start-purchase-game-play', authenticateToken, async (req, res) => 
       });
     }
 
-    // Increment seat count when user actually starts playing (only if cards are available)
-    transaction.usedSeats = (transaction.usedSeats || 0) + 1;
-    
-    // Track game play
+    // Don't increment seats here - seats will be incremented when user completes all 3 levels
+    // Just track that user started playing (for checking if they already played)
     if (!transaction.gamePlays) {
       transaction.gamePlays = [];
     }
-    transaction.gamePlays.push({
-      userId: req.userId,
-      playedAt: new Date(),
-    });
-
-    await transaction.save();
+    // Only add to gamePlays if user is not already in the list
+    const userAlreadyInGamePlays = transaction.gamePlays.some(
+      (play) => play.userId && play.userId.toString() === req.userId.toString()
+    );
+    if (!userAlreadyInGamePlays) {
+      transaction.gamePlays.push({
+        userId: req.userId,
+        playedAt: new Date(),
+      });
+      await transaction.save();
+    }
 
     // Update organization/school seatUsage if transaction belongs to one
     if (transaction.organizationId) {
@@ -2183,6 +2248,49 @@ router.post('/start-purchase-game-play', authenticateToken, async (req, res) => 
   } catch (error) {
     console.error('Error starting purchase game play:', error);
     res.status(500).json({ error: 'Server error: ' + error.message });
+  }
+});
+
+// Get referrer's unique code for referred user
+router.get('/referrer-code', authenticateToken, async (req, res) => {
+  try {
+    const User = require('../models/User');
+    const Transaction = require('../models/Transaction');
+    
+    const user = await User.findById(req.userId).select('referredBy');
+    if (!user || !user.referredBy) {
+      return res.status(404).json({ error: 'No referrer found for this user' });
+    }
+
+    // Find referrer's active transaction with available seats
+    const referrerTransaction = await Transaction.findOne({
+      userId: user.referredBy,
+      status: 'paid',
+      $or: [
+        { 'contractPeriod.endDate': { $exists: false } },
+        { 'contractPeriod.endDate': { $gt: new Date() } }
+      ]
+    })
+      .sort({ createdAt: -1 }) // Get most recent transaction
+      .select('uniqueCode maxSeats usedSeats');
+
+    if (!referrerTransaction) {
+      return res.status(404).json({ error: 'No active transaction found for referrer' });
+    }
+
+    // Check if seats are available
+    const remainingSeats = (referrerTransaction.maxSeats || 5) - (referrerTransaction.usedSeats || 0);
+    if (remainingSeats <= 0) {
+      return res.status(400).json({ error: 'Referrer has no available seats' });
+    }
+
+    res.json({
+      uniqueCode: referrerTransaction.uniqueCode,
+      referrerId: user.referredBy.toString()
+    });
+  } catch (error) {
+    console.error('Error getting referrer code:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 

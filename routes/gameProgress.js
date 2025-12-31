@@ -27,7 +27,8 @@ router.post('/', authenticateToken, async (req, res) => {
       maxScore,
       correctAnswers,
       totalQuestions,
-      percentageScore
+      percentageScore,
+      riskLevel
     } = req.body;
 
     console.log(`📊 Saving game progress - User: ${req.userId}, Level: ${levelNumber}, Product: ${productId}, Cards: ${cards?.length || 0}`);
@@ -98,6 +99,18 @@ router.post('/', authenticateToken, async (req, res) => {
     const finalTotalQuestions = totalQuestions !== undefined ? totalQuestions : (processedCards.length > 0 ? processedCards.reduce((sum, card) => sum + card.cardTotalQuestions, 0) : 0);
     const finalMaxScore = maxScore !== undefined ? maxScore : (finalTotalQuestions > 0 ? finalTotalQuestions * 4 : 0);
     const finalPercentageScore = percentageScore !== undefined ? percentageScore : (finalMaxScore > 0 ? Math.round((finalTotalScore / finalMaxScore) * 100) : 0);
+    
+    // Calculate risk level based on percentage score if not provided
+    let finalRiskLevel = riskLevel;
+    if (!finalRiskLevel && finalPercentageScore !== undefined) {
+      if (finalPercentageScore >= 84) {
+        finalRiskLevel = 'Confident';
+      } else if (finalPercentageScore >= 44) {
+        finalRiskLevel = 'Cautious';
+      } else {
+        finalRiskLevel = 'Vulnerable';
+      }
+    }
 
     // Get the first cardId from cards (if available) for top-level cardId
     let firstCardId = null;
@@ -112,6 +125,28 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 
     console.log(`🔍 Looking for existing progress - User: ${req.userId}, Level: ${levelNumber}`);
+
+    // IMPORTANT: Check if user already completed all 3 levels BEFORE we save/update progress
+    // This prevents double-counting when user plays again
+    let wasAlreadyCompletedBefore = false;
+    if (levelNumber === 3) {
+      const allProgressBefore = await GameProgress.find({ 
+        userId: req.userId
+      });
+      
+      const level1CompleteBefore = allProgressBefore.some(p => 
+        p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0
+      );
+      const level2CompleteBefore = allProgressBefore.some(p => 
+        p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0
+      );
+      const level3CompleteBefore = allProgressBefore.some(p => 
+        p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0
+      );
+      
+      wasAlreadyCompletedBefore = level1CompleteBefore && level2CompleteBefore && level3CompleteBefore;
+      console.log(`🔍 Check before save: wasAlreadyCompletedBefore = ${wasAlreadyCompletedBefore}`);
+    }
 
     // Find or create progress document for this user and level (one document per user per level)
     let progress = await GameProgress.findOne({ 
@@ -136,6 +171,7 @@ router.post('/', authenticateToken, async (req, res) => {
           correctAnswers: finalCorrectAnswers,
           totalQuestions: finalTotalQuestions,
           percentageScore: finalPercentageScore,
+          riskLevel: finalRiskLevel,
           completedAt: new Date()
         });
         console.log(`✅ Progress created successfully for level ${levelNumber} - ID: ${progress._id}`);
@@ -159,6 +195,7 @@ router.post('/', authenticateToken, async (req, res) => {
               correctAnswers: finalCorrectAnswers,
               totalQuestions: finalTotalQuestions,
               percentageScore: finalPercentageScore,
+              riskLevel: finalRiskLevel,
               completedAt: new Date()
             });
           } catch (retryError) {
@@ -186,6 +223,7 @@ router.post('/', authenticateToken, async (req, res) => {
       progress.correctAnswers = finalCorrectAnswers;
       progress.totalQuestions = finalTotalQuestions;
       progress.percentageScore = finalPercentageScore;
+      progress.riskLevel = finalRiskLevel;
       progress.completedAt = new Date();
 
       await progress.save();
@@ -213,6 +251,192 @@ router.post('/', authenticateToken, async (req, res) => {
       }
     }
     
+    // Check if user has completed all 3 levels, and increment seat count if so
+    // Only increment when level 3 is saved and all 3 levels are completed
+    if (levelNumber === 3) {
+      try {
+        // Check if user has completed all 3 levels NOW (after this save)
+        const allProgress = await GameProgress.find({ 
+          userId: req.userId
+        });
+        
+        const level1Complete = allProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
+        const level2Complete = allProgress.some(p => p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0);
+        const level3Complete = allProgress.some(p => p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0);
+        
+        const allLevelsCompleted = level1Complete && level2Complete && level3Complete;
+        
+        // Use the wasAlreadyCompletedBefore check we did BEFORE saving progress
+        // This ensures we only increment once when user first completes all 3 levels
+        const isFirstTimeCompletion = allLevelsCompleted && !wasAlreadyCompletedBefore;
+        
+        if (isFirstTimeCompletion) {
+          console.log(`🎉 User ${req.userId} has completed all 3 levels for the first time - incrementing seat count`);
+          console.log(`🔍 Debug: wasAlreadyCompletedBefore = ${wasAlreadyCompletedBefore}, allLevelsCompleted = ${allLevelsCompleted}`);
+          
+          // Find transaction or free trial where this user is in gamePlays
+          const Transaction = require('../models/Transaction');
+          const FreeTrial = require('../models/FreeTrial');
+          
+          // Try to find transaction first
+          const transactions = await Transaction.find({
+            'gamePlays.userId': req.userId,
+            status: 'paid'
+          }).sort({ createdAt: -1 });
+          
+          // Find matching transaction by productId (prefer most recent)
+          let transaction = null;
+          for (const tx of transactions) {
+            const txProductId = tx.productId?._id?.toString() || tx.productId?.toString();
+            const progressProductId = productId?.toString();
+            if (txProductId === progressProductId) {
+              transaction = tx;
+              break;
+            }
+          }
+          
+          // If no transaction found, try free trial
+          let freeTrial = null;
+          if (!transaction) {
+            const freeTrials = await FreeTrial.find({
+              'gamePlays.userId': req.userId,
+              status: { $in: ['active', 'completed'] }
+            }).sort({ createdAt: -1 });
+            
+            for (const ft of freeTrials) {
+              const ftProductId = ft.productId?._id?.toString() || ft.productId?.toString();
+              const progressProductId = productId?.toString();
+              if (ftProductId === progressProductId) {
+                freeTrial = ft;
+                break;
+              }
+            }
+          }
+          
+          // Increment seat for transaction if found
+          if (transaction) {
+            // Use atomic increment to prevent race conditions
+            const oldUsedSeats = transaction.usedSeats || 0;
+            const updatedTransaction = await Transaction.findByIdAndUpdate(
+              transaction._id,
+              { $inc: { usedSeats: 1 } },
+              { new: true } // Return updated document
+            );
+            
+            console.log(`✅ Incremented usedSeats for transaction ${transaction._id}: ${oldUsedSeats} -> ${updatedTransaction.usedSeats}`);
+            
+            // Update transaction reference for organization/school updates
+            transaction = updatedTransaction;
+            
+            // Update organization/school seatUsage if transaction belongs to one
+            if (transaction.organizationId) {
+              try {
+                const Organization = require('../models/Organization');
+                const organization = await Organization.findById(transaction.organizationId);
+                if (organization) {
+                  const orgTransactions = await Transaction.find({ 
+                    organizationId: transaction.organizationId,
+                    status: 'paid'
+                  });
+                  const orgFreeTrials = await FreeTrial.find({ 
+                    organizationId: transaction.organizationId
+                  });
+                  const transactionUsedSeats = orgTransactions.reduce((sum, tx) => sum + (tx.usedSeats || 0), 0);
+                  const freeTrialUsedSeats = orgFreeTrials.reduce((sum, ft) => sum + (ft.usedSeats || 0), 0);
+                  const totalUsedSeats = transactionUsedSeats + freeTrialUsedSeats;
+                  
+                  if (!organization.seatUsage) {
+                    organization.seatUsage = { seatLimit: 0, usedSeats: 0, status: 'prospect' };
+                  }
+                  organization.seatUsage.usedSeats = totalUsedSeats;
+                  await organization.save();
+                }
+              } catch (err) {
+                console.error('Error updating organization seatUsage:', err);
+              }
+            }
+            
+            if (transaction.schoolId) {
+              try {
+                const School = require('../models/School');
+                const school = await School.findById(transaction.schoolId);
+                if (school) {
+                  const schoolTransactions = await Transaction.find({ 
+                    schoolId: transaction.schoolId,
+                    status: 'paid'
+                  });
+                  const totalUsedSeats = schoolTransactions.reduce((sum, tx) => sum + (tx.usedSeats || 0), 0);
+                  
+                  if (!school.seatUsage) {
+                    school.seatUsage = { seatLimit: 0, usedSeats: 0, status: 'prospect' };
+                  }
+                  school.seatUsage.usedSeats = totalUsedSeats;
+                  await school.save();
+                }
+              } catch (err) {
+                console.error('Error updating school seatUsage:', err);
+              }
+            }
+          } else if (freeTrial) {
+            // Use atomic increment to prevent race conditions
+            const updateData = { $inc: { usedSeats: 1 } };
+            
+            // Fetch current free trial to check if we need to update status
+            const currentFreeTrial = await FreeTrial.findById(freeTrial._id);
+            const newUsedSeats = (currentFreeTrial.usedSeats || 0) + 1;
+            
+            // Update status if all seats will be used
+            if (newUsedSeats >= (currentFreeTrial.maxSeats || 2)) {
+              updateData.$set = { status: 'completed' };
+            }
+            
+            const updatedFreeTrial = await FreeTrial.findByIdAndUpdate(
+              freeTrial._id,
+              updateData,
+              { new: true } // Return updated document
+            );
+            
+            console.log(`✅ Incremented usedSeats for free trial ${freeTrial._id}: ${currentFreeTrial.usedSeats || 0} -> ${updatedFreeTrial.usedSeats}`);
+            
+            // Update freeTrial reference for organization updates
+            freeTrial = updatedFreeTrial;
+            
+            // Update organization seatUsage if free trial belongs to one
+            if (freeTrial.organizationId) {
+              try {
+                const Organization = require('../models/Organization');
+                const organization = await Organization.findById(freeTrial.organizationId);
+                if (organization) {
+                  const orgTransactions = await Transaction.find({ 
+                    organizationId: freeTrial.organizationId,
+                    status: 'paid'
+                  });
+                  const orgFreeTrials = await FreeTrial.find({ 
+                    organizationId: freeTrial.organizationId
+                  });
+                  const transactionUsedSeats = orgTransactions.reduce((sum, tx) => sum + (tx.usedSeats || 0), 0);
+                  const freeTrialUsedSeats = orgFreeTrials.reduce((sum, ft) => sum + (ft.usedSeats || 0), 0);
+                  const totalUsedSeats = transactionUsedSeats + freeTrialUsedSeats;
+                  
+                  if (!organization.seatUsage) {
+                    organization.seatUsage = { seatLimit: 0, usedSeats: 0, status: 'prospect' };
+                  }
+                  organization.seatUsage.usedSeats = totalUsedSeats;
+                  await organization.save();
+                }
+              } catch (err) {
+                console.error('Error updating organization seatUsage:', err);
+              }
+            }
+          } else {
+            console.log(`⚠️ Could not find transaction or free trial for user ${req.userId} with productId ${productId}`);
+          }
+        }
+      } catch (seatError) {
+        // Don't fail progress saving if seat increment fails
+        console.error('Error incrementing seat count:', seatError);
+      }
+    }
 
     console.log(`✅ Successfully saved/updated progress for user ${req.userId}, level ${levelNumber}`);
     res.status(201).json({
@@ -344,11 +568,11 @@ router.get('/user/:userId', authenticateToken, async (req, res) => {
       userId: firstProgress.userId,
       productId: firstProgress.productId,
       level1: [],
-      level1Stats: { totalScore: 0, maxScore: 0, correctAnswers: 0, totalQuestions: 0, percentageScore: 0, completedAt: null },
+      level1Stats: { totalScore: 0, maxScore: 0, correctAnswers: 0, totalQuestions: 0, percentageScore: 0, riskLevel: null, completedAt: null },
       level2: [],
-      level2Stats: { totalScore: 0, maxScore: 0, correctAnswers: 0, totalQuestions: 0, percentageScore: 0, completedAt: null },
+      level2Stats: { totalScore: 0, maxScore: 0, correctAnswers: 0, totalQuestions: 0, percentageScore: 0, riskLevel: null, completedAt: null },
       level3: [],
-      level3Stats: { totalScore: 0, maxScore: 0, correctAnswers: 0, totalQuestions: 0, percentageScore: 0, completedAt: null },
+      level3Stats: { totalScore: 0, maxScore: 0, correctAnswers: 0, totalQuestions: 0, percentageScore: 0, riskLevel: null, completedAt: null },
       createdAt: firstProgress.createdAt,
       updatedAt: allProgress[allProgress.length - 1].updatedAt
     };
@@ -396,6 +620,7 @@ router.get('/user/:userId', authenticateToken, async (req, res) => {
         correctAnswers: progress.correctAnswers || 0,
         totalQuestions: progress.totalQuestions || 0,
         percentageScore: progress.percentageScore || 0,
+        riskLevel: progress.riskLevel || null,
         completedAt: progress.completedAt
       };
     }
@@ -449,11 +674,11 @@ router.get('/user', authenticateToken, async (req, res) => {
       userId: firstProgress.userId,
       productId: firstProgress.productId,
       level1: [],
-      level1Stats: { totalScore: 0, maxScore: 0, correctAnswers: 0, totalQuestions: 0, percentageScore: 0, completedAt: null },
+      level1Stats: { totalScore: 0, maxScore: 0, correctAnswers: 0, totalQuestions: 0, percentageScore: 0, riskLevel: null, completedAt: null },
       level2: [],
-      level2Stats: { totalScore: 0, maxScore: 0, correctAnswers: 0, totalQuestions: 0, percentageScore: 0, completedAt: null },
+      level2Stats: { totalScore: 0, maxScore: 0, correctAnswers: 0, totalQuestions: 0, percentageScore: 0, riskLevel: null, completedAt: null },
       level3: [],
-      level3Stats: { totalScore: 0, maxScore: 0, correctAnswers: 0, totalQuestions: 0, percentageScore: 0, completedAt: null },
+      level3Stats: { totalScore: 0, maxScore: 0, correctAnswers: 0, totalQuestions: 0, percentageScore: 0, riskLevel: null, completedAt: null },
       createdAt: firstProgress.createdAt,
       updatedAt: allProgress[allProgress.length - 1].updatedAt
     };
@@ -501,6 +726,7 @@ router.get('/user', authenticateToken, async (req, res) => {
         correctAnswers: progress.correctAnswers || 0,
         totalQuestions: progress.totalQuestions || 0,
         percentageScore: progress.percentageScore || 0,
+        riskLevel: progress.riskLevel || null,
         completedAt: progress.completedAt
       };
     }

@@ -121,6 +121,11 @@ const GameProgressSchema = new Schema(
       min: 0,
       max: 100
     },
+    riskLevel: {
+      type: String,
+      enum: ['Confident', 'Cautious', 'Vulnerable'],
+      default: null
+    },
     completedAt: {
       type: Date
     }

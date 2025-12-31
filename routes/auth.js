@@ -295,7 +295,7 @@ router.post(
         });
       }
 
-      const { email, password, name, userType, organizationName, organizationType, customOrganizationType } = req.body;
+      const { email, password, name, userType, organizationName, organizationType, customOrganizationType, referralCode } = req.body;
 
       // Log registration attempt for debugging
       console.log('Registration attempt:', {
@@ -351,6 +351,28 @@ router.post(
       const emailVerificationExpiry = new Date();
       emailVerificationExpiry.setHours(emailVerificationExpiry.getHours() + 24); // 24 hours expiry
 
+      // Validate and find referrer if referralCode is provided
+      let referrerId = null;
+      if (referralCode) {
+        try {
+          const referrer = await User.findById(referralCode);
+          if (referrer) {
+            // Make sure user is not referring themselves
+            if (referrer.email.toLowerCase() !== email.toLowerCase()) {
+              referrerId = referrer._id;
+              console.log('Referrer found:', referrer._id.toString(), 'for new user:', email);
+            } else {
+              console.log('User cannot refer themselves');
+            }
+          } else {
+            console.log('Referrer not found for ID:', referralCode);
+          }
+        } catch (error) {
+          console.error('Error validating referral code:', error);
+          // Continue without referral if invalid code
+        }
+      }
+
       // Create user FIRST - this ensures we have user._id for ownerId
       const user = await User.create({
         email,
@@ -360,7 +382,8 @@ router.post(
         isActive: true,
         isEmailVerified: false,
         emailVerificationToken,
-        emailVerificationExpiry
+        emailVerificationExpiry,
+        referredBy: referrerId
       });
 
       // Verify user was created successfully and has _id
@@ -1036,15 +1059,45 @@ router.get('/user/verify-email', async (req, res) => {
       return res.status(400).json({ error: 'Verification token is required' });
     }
 
-    const user = await User.findOne({
+    // Express automatically decodes URL-encoded query parameters, but let's ensure we handle it properly
+    // Try to find user with the token as-is first (most common case)
+    let user = await User.findOne({
       emailVerificationToken: token,
       emailVerificationExpiry: { $gt: new Date() }
     });
 
+    // If not found, try with decoded token (in case of double encoding)
     if (!user) {
-      return res.status(400).json({ error: 'Invalid or expired verification token' });
+      try {
+        const decodedToken = decodeURIComponent(token);
+        user = await User.findOne({
+          emailVerificationToken: decodedToken,
+          emailVerificationExpiry: { $gt: new Date() }
+        });
+      } catch (decodeError) {
+        // If decode fails, token wasn't encoded, continue with original
+      }
     }
 
+    if (!user) {
+      // Additional check: see if token exists but expired
+      const expiredUser = await User.findOne({
+        emailVerificationToken: token
+      });
+      
+      if (expiredUser) {
+        return res.status(400).json({ error: 'Verification token has expired. Please request a new verification email.' });
+      }
+
+      console.error('Verification failed - Token not found:', {
+        tokenLength: token ? token.length : 0,
+        tokenPreview: token ? token.substring(0, 20) + '...' : 'null'
+      });
+      
+      return res.status(400).json({ error: 'Invalid verification token' });
+    }
+
+    // Verify the email
     user.isEmailVerified = true;
     user.emailVerificationToken = undefined;
     user.emailVerificationExpiry = undefined;

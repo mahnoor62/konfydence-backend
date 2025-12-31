@@ -291,12 +291,30 @@ router.post('/use-code', authenticateToken, async (req, res) => {
       (play) => play.userId && play.userId.toString() === req.userId.toString()
     );
 
+    // If user has played, check if they've completed all 3 levels
     if (hasUserPlayed) {
-      return res.status(400).json({ 
-        error: 'You have already played the game with this code. Your seats are finished. You cannot play the game with any other seat.',
-        alreadyPlayed: true,
-        seatsFinished: true
-      });
+      // Check user's game progress to see if they've completed all 3 levels
+      const GameProgress = require('../models/GameProgress');
+      const userProgress = await GameProgress.find({ userId: req.userId });
+      
+      // Check if user has completed all 3 levels
+      const level1Complete = userProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
+      const level2Complete = userProgress.some(p => p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0);
+      const level3Complete = userProgress.some(p => p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0);
+      
+      const allLevelsCompleted = level1Complete && level2Complete && level3Complete;
+      
+      // If user has completed all 3 levels, they've used their seat and can't play again
+      if (allLevelsCompleted) {
+        return res.status(400).json({ 
+          error: 'You have already completed all levels with this code. Your seat has been used.',
+          alreadyPlayed: true,
+          seatsFinished: true
+        });
+      }
+      
+      // If user has played but not completed all levels, allow resume (seat not used yet)
+      // This allows users to resume their game until they complete all 3 levels
     }
 
     // Code verification - just track code application, don't increment seat count
@@ -464,10 +482,12 @@ router.get('/check-code/:code', async (req, res) => {
       );
     }
 
-    if (hasUserPlayed) {
+    // Only block if seats are full (which happens after all 3 levels are completed)
+    // If user is in gamePlays but seats aren't full, they can resume
+    if (hasUserPlayed && seatsFull) {
       return res.json({ 
         valid: false, 
-        message: 'You have already played the game with this code. Your seats are finished. You cannot play the game with any other seat.',
+        message: 'You have already completed all levels with this code. Your seats are finished.',
         alreadyPlayed: true,
         seatsFinished: true,
         isExpired: false
@@ -544,12 +564,30 @@ router.post('/start-game-play', authenticateToken, async (req, res) => {
       (play) => play.userId && play.userId.toString() === req.userId.toString()
     );
 
+    // If user has played, check if they've completed all 3 levels
     if (hasUserPlayed) {
-      return res.status(400).json({ 
-        error: 'You have already played the game with this code. Your seats are finished. You cannot play the game with any other seat.',
-        alreadyPlayed: true,
-        seatsFinished: true
-      });
+      // Check user's game progress to see if they've completed all 3 levels
+      const GameProgress = require('../models/GameProgress');
+      const userProgress = await GameProgress.find({ userId: req.userId });
+      
+      // Check if user has completed all 3 levels
+      const level1Complete = userProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
+      const level2Complete = userProgress.some(p => p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0);
+      const level3Complete = userProgress.some(p => p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0);
+      
+      const allLevelsCompleted = level1Complete && level2Complete && level3Complete;
+      
+      // If user has completed all 3 levels, they've used their seat and can't play again
+      if (allLevelsCompleted) {
+        return res.status(400).json({ 
+          error: 'You have already completed all levels with this code. Your seat has been used.',
+          alreadyPlayed: true,
+          seatsFinished: true
+        });
+      }
+      
+      // If user has played but not completed all levels, allow resume (seat not used yet)
+      // This allows users to resume their game until they complete all 3 levels
     }
 
     // CRITICAL: Check if cards are available before incrementing seats
@@ -589,22 +627,20 @@ router.post('/start-game-play', authenticateToken, async (req, res) => {
       });
     }
 
-    // Increment seat count when user actually starts playing (only if cards are available)
-    freeTrial.usedSeats += 1;
-    
-    // Track game play
+    // Don't increment seats here - seats will be incremented when user completes all 3 levels
+    // Just track that user started playing (for checking if they already played)
     freeTrial.gamePlays = freeTrial.gamePlays || [];
-    freeTrial.gamePlays.push({
-      userId: req.userId,
-      playedAt: new Date(),
-    });
-
-    // Update status if all seats used
-    if (freeTrial.usedSeats >= freeTrial.maxSeats) {
-      freeTrial.status = 'completed';
+    // Only add to gamePlays if user is not already in the list
+    const userAlreadyInGamePlays = freeTrial.gamePlays.some(
+      (play) => play.userId && play.userId.toString() === req.userId.toString()
+    );
+    if (!userAlreadyInGamePlays) {
+      freeTrial.gamePlays.push({
+        userId: req.userId,
+        playedAt: new Date(),
+      });
+      await freeTrial.save();
     }
-
-    await freeTrial.save();
 
     // Update linked lead if trial is completed
     if (freeTrial.status === 'completed') {

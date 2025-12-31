@@ -70,6 +70,10 @@ const UserSchema = new Schema(
     lastLogin: {
       type: Date
     },
+    referredBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User'
+    },
     memberships: [{
       packageId: {
         type: Schema.Types.ObjectId,
