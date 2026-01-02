@@ -1034,6 +1034,13 @@ router.get('/user/me', authenticateToken, async (req, res) => {
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
+    
+    // Include password field if it exists (for display purposes)
+    const userObject = user.toObject();
+    // Password field is not excluded, so it will be included automatically if it exists
+    if (!userObject.password) {
+      userObject.password = undefined;
+    }
 
     // Include profile photo URL if exists
     const userData = user.toObject();
@@ -1041,6 +1048,11 @@ router.get('/user/me', authenticateToken, async (req, res) => {
       const apiBase = process.env.API_BASE_URL || process.env.FRONTEND_URL || 'http://localhost:5000';
       const normalizedApiBase = apiBase.endsWith('/') ? apiBase.slice(0, -1) : apiBase;
       userData.profilePhotoUrl = `${normalizedApiBase}${userData.profilePhoto}`;
+    }
+    
+    // Include password field if it exists (for display purposes)
+    if (user.password) {
+      userData.password = user.password;
     }
 
     res.json(userData);

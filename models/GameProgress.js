@@ -126,6 +126,10 @@ const GameProgressSchema = new Schema(
       enum: ['Confident', 'Cautious', 'Vulnerable'],
       default: null
     },
+    isDemo: {
+      type: Boolean,
+      default: false
+    },
     completedAt: {
       type: Date
     }

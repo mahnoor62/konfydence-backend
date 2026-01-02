@@ -776,6 +776,21 @@ router.post('/webhook', async (req, res) => {
           },
         });
 
+        // Update GameProgress isDemo to false when user makes a purchase
+        // This allows demo users who purchase to see their game progress
+        try {
+          const GameProgress = require('../models/GameProgress');
+          const updateResult = await GameProgress.updateMany(
+            { userId: userId, isDemo: true },
+            { $set: { isDemo: false } }
+          );
+          console.log(`✅ Updated GameProgress isDemo to false for user ${userId} after purchase`);
+          console.log(`📊 Updated ${updateResult.modifiedCount} GameProgress document(s) from isDemo: true to isDemo: false`);
+        } catch (gameProgressError) {
+          console.error('Error updating GameProgress isDemo:', gameProgressError);
+          // Don't fail the transaction if this update fails
+        }
+
         // Add membership to user (only for regular packages, not custom packages)
         if (packageId && !customPackageId) {
           // Fetch product if productId is provided
@@ -1156,6 +1171,20 @@ router.post('/webhook', async (req, res) => {
             console.log('ℹ️ User does not have schoolId:', user._id);
           }
 
+          // Update GameProgress isDemo to false when user makes a purchase
+          // This allows demo users who purchase to see their game progress
+          try {
+            const GameProgress = require('../models/GameProgress');
+            await GameProgress.updateMany(
+              { userId: userId, isDemo: true },
+              { $set: { isDemo: false } }
+            );
+            console.log(`✅ Updated GameProgress isDemo to false for user ${userId} after purchase (payment_intent.succeeded)`);
+          } catch (gameProgressError) {
+            console.error('Error updating GameProgress isDemo:', gameProgressError);
+            // Don't fail the transaction if this update fails
+          }
+
           // Send transaction success email
           try {
             let organization = null;
@@ -1410,10 +1439,25 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
               endDate: contractEndDate || (billingType === 'subscription'
                 ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
                 : null),
-            },
-          });
+          },
+        });
 
-          // Add membership to user (only for regular packages, not custom packages)
+        // Update GameProgress isDemo to false when user makes a purchase
+        // This allows demo users who purchase to see their game progress
+        try {
+          const GameProgress = require('../models/GameProgress');
+          const updateResult = await GameProgress.updateMany(
+            { userId: userId, isDemo: true },
+            { $set: { isDemo: false } }
+          );
+          console.log(`✅ Updated GameProgress isDemo to false for user ${userId} after purchase`);
+          console.log(`📊 Updated ${updateResult.modifiedCount} GameProgress document(s) from isDemo: true to isDemo: false`);
+        } catch (gameProgressError) {
+          console.error('Error updating GameProgress isDemo:', gameProgressError);
+          // Don't fail the transaction if this update fails
+        }
+
+        // Add membership to user (only for regular packages, not custom packages)
           if (package && !customPackage) {
             // Determine membership type based on package targetAudiences or product targetAudience
             const membershipType = getMembershipType(package, product);
@@ -1712,6 +1756,7 @@ router.get('/check-purchase-code/:code', async (req, res) => {
     const userId = req.query.userId || req.userId; // Try to get from query or auth if available
     let hasUserPlayed = false;
     let isOwner = false;
+    let userSeatUsed = false;
     
     if (userId) {
       hasUserPlayed = transaction.gamePlays?.some(
@@ -1723,6 +1768,43 @@ router.get('/check-purchase-code/:code', async (req, res) => {
         const transactionUserId = transaction.userId?._id || transaction.userId;
         if (transactionUserId && transactionUserId.toString() === userId.toString()) {
           isOwner = true;
+        }
+      }
+      
+      // CRITICAL: Check if user has already completed all 3 levels and used their seat
+      if (hasUserPlayed) {
+        // Check user's game progress to see if they've completed all 3 levels FOR THIS PRODUCT
+        const GameProgress = require('../models/GameProgress');
+        const transactionProductId = transaction.productId?._id || transaction.productId?.id || transaction.productId;
+        
+        // Only check GameProgress for THIS specific productId
+        const userProgress = await GameProgress.find({ 
+          userId: userId,
+          productId: transactionProductId // Filter by productId from transaction
+        });
+        
+        // Check if user has completed all 3 levels FOR THIS PRODUCT
+        const level1Complete = userProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
+        const level2Complete = userProgress.some(p => p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0);
+        const level3Complete = userProgress.some(p => p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0);
+        const allLevelsCompleted = level1Complete && level2Complete && level3Complete;
+        
+        // Check if user's gamePlay entry has completed flag (seat has been incremented)
+        const userGamePlay = transaction.gamePlays?.find(
+          (play) => play.userId && play.userId.toString() === userId.toString()
+        );
+        userSeatUsed = userGamePlay?.completed === true;
+        
+        // If user has completed all 3 levels AND their seat has been used, they can't play again
+        if (allLevelsCompleted && userSeatUsed) {
+          console.log(`⚠️ User ${userId} has completed all levels and seat is used - blocking access in check-purchase-code`);
+          return res.json({ 
+            valid: false,
+            message: 'You have already used your seat. You cannot play the game again.',
+            alreadyPlayed: true,
+            seatsFinished: true,
+            userSeatUsed: true
+          });
         }
       }
     }
@@ -1807,6 +1889,46 @@ router.post('/use-purchase-code', authenticateToken, async (req, res) => {
     if (transaction.contractPeriod?.endDate) {
       if (isTransactionExpired(transaction.contractPeriod.endDate)) {
         return res.status(400).json({ error: 'This purchase code has expired' });
+      }
+    }
+
+    // CRITICAL: Check if logged-in user has already played and used their seat
+    // This check must be done BEFORE membership checks to block users immediately
+    const hasUserPlayed = transaction.gamePlays?.some(
+      (play) => play.userId && play.userId.toString() === req.userId.toString()
+    );
+    
+    if (hasUserPlayed) {
+      // Check user's game progress to see if they've completed all 3 levels FOR THIS PRODUCT
+      const GameProgress = require('../models/GameProgress');
+      const transactionProductId = transaction.productId?._id || transaction.productId?.id || transaction.productId;
+      
+      // Only check GameProgress for THIS specific productId
+      const userProgress = await GameProgress.find({ 
+        userId: req.userId,
+        productId: transactionProductId // Filter by productId from transaction
+      });
+      
+      console.log(`🔍 [use-purchase-code] Checking game progress for user ${req.userId}, productId: ${transactionProductId}, found ${userProgress.length} progress records`);
+      
+      // Check if user has completed all 3 levels FOR THIS PRODUCT
+      const level1Complete = userProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
+      const level2Complete = userProgress.some(p => p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0);
+      const level3Complete = userProgress.some(p => p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0);
+      const allLevelsCompleted = level1Complete && level2Complete && level3Complete;
+      
+      console.log(`🔍 [use-purchase-code] Level completion check: L1=${level1Complete}, L2=${level2Complete}, L3=${level3Complete}, All=${allLevelsCompleted}`);
+      
+      // CRITICAL: If user has completed all 3 levels, they've used their seat - block them
+      // We don't need to check the completed flag - if all 3 levels are done, seat is used
+      if (allLevelsCompleted) {
+        console.log(`⚠️ [use-purchase-code] User ${req.userId} has completed all levels - blocking access (seat already used)`);
+        return res.status(400).json({ 
+          error: 'You have already used your seat. You cannot play the game again.',
+          alreadyPlayed: true,
+          seatsFinished: true,
+          userSeatUsed: true
+        });
       }
     }
 
@@ -1946,37 +2068,6 @@ router.post('/use-purchase-code', authenticateToken, async (req, res) => {
     const maxSeats = transaction.maxSeats || 5;
     const usedSeats = transaction.usedSeats || 0;
 
-    // Check if this user has already played with this code
-    const hasUserPlayed = transaction.gamePlays?.some(
-      (play) => play.userId && play.userId.toString() === req.userId.toString()
-    );
-
-    // If user has played, check if they've completed all 3 levels
-    if (hasUserPlayed) {
-      // Check user's game progress to see if they've completed all 3 levels
-      const GameProgress = require('../models/GameProgress');
-      const userProgress = await GameProgress.find({ userId: req.userId });
-      
-      // Check if user has completed all 3 levels
-      const level1Complete = userProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
-      const level2Complete = userProgress.some(p => p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0);
-      const level3Complete = userProgress.some(p => p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0);
-      
-      const allLevelsCompleted = level1Complete && level2Complete && level3Complete;
-      
-      // If user has completed all 3 levels, they've used their seat and can't play again
-      if (allLevelsCompleted) {
-        return res.status(400).json({ 
-          error: 'You have already completed all levels with this code. Your seat has been used.',
-          alreadyPlayed: true,
-          seatsFinished: true
-        });
-      }
-      
-      // If user has played but not completed all levels, allow resume (seat not used yet)
-      // This allows users to resume their game until they complete all 3 levels
-    }
-
     // Track code application (for statistics)
     transaction.codeApplications = (transaction.codeApplications || 0) + 1;
     
@@ -2098,26 +2189,52 @@ router.post('/start-purchase-game-play', authenticateToken, async (req, res) => 
       (play) => play.userId && play.userId.toString() === req.userId.toString()
     );
 
-    // If user has played, check if they've completed all 3 levels
+    // If user has played, check if they've completed all 3 levels FOR THIS SPECIFIC PRODUCT/TRANSACTION
     if (hasUserPlayed) {
-      // Check user's game progress to see if they've completed all 3 levels
+      // Check user's game progress to see if they've completed all 3 levels FOR THIS PRODUCT
       const GameProgress = require('../models/GameProgress');
-      const userProgress = await GameProgress.find({ userId: req.userId });
+      const transactionProductId = transaction.productId?._id || transaction.productId?.id || transaction.productId;
       
-      // Check if user has completed all 3 levels
+      // CRITICAL: Only check GameProgress for THIS specific productId
+      // This ensures we're checking the right product, not all products
+      const userProgress = await GameProgress.find({ 
+        userId: req.userId,
+        productId: transactionProductId // Filter by productId from transaction
+      });
+      
+      console.log(`🔍 [start-game-play] Checking game progress for user ${req.userId}, productId: ${transactionProductId}, found ${userProgress.length} progress records`);
+      
+      // Check if user has completed all 3 levels FOR THIS PRODUCT
       const level1Complete = userProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
       const level2Complete = userProgress.some(p => p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0);
       const level3Complete = userProgress.some(p => p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0);
       
       const allLevelsCompleted = level1Complete && level2Complete && level3Complete;
       
-      // If user has completed all 3 levels, they've used their seat and can't play again
-      if (allLevelsCompleted) {
+      console.log(`🔍 [start-game-play] Level completion check: L1=${level1Complete}, L2=${level2Complete}, L3=${level3Complete}, All=${allLevelsCompleted}`);
+      console.log(`🔍 [start-game-play] Transaction usedSeats: ${transaction.usedSeats}, maxSeats: ${transaction.maxSeats}`);
+      
+      // CRITICAL: Only block if user has completed all 3 levels AND their seat has been incremented
+      // Check if user's gamePlay entry has completed flag OR if usedSeats has been incremented for this user
+      const userGamePlay = transaction.gamePlays?.find(
+        (play) => play.userId && play.userId.toString() === req.userId.toString()
+      );
+      const userSeatUsed = userGamePlay?.completed === true;
+      
+      // If user has completed all 3 levels AND their seat has been used, they can't play again
+      if (allLevelsCompleted && userSeatUsed) {
+        console.log(`⚠️ [start-game-play] User ${req.userId} has completed all levels and seat is used - blocking access`);
         return res.status(400).json({ 
           error: 'You have already completed all levels with this code. Your seat has been used.',
           alreadyPlayed: true,
           seatsFinished: true
         });
+      }
+      
+      // If user has completed all 3 levels but seat not incremented yet, allow them to continue
+      // (This can happen if seat increment failed or is pending)
+      if (allLevelsCompleted && !userSeatUsed) {
+        console.log(`ℹ️ [start-game-play] User ${req.userId} has completed all levels but seat not incremented yet - allowing access`);
       }
       
       // If user has played but not completed all levels, allow resume (seat not used yet)
@@ -2425,6 +2542,258 @@ router.post('/fix-transactions', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error fixing transactions:', error);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Increment seat on completion for PURCHASE users (separate from demo users)
+// This endpoint is called when a purchase user completes all 3 levels
+router.post('/increment-seat-on-completion', authenticateToken, async (req, res) => {
+  try {
+    const { code } = req.body;
+    
+    if (!code) {
+      return res.status(400).json({ error: 'Code is required' });
+    }
+
+    if (!req.userId) {
+      return res.status(401).json({ error: 'User authentication required' });
+    }
+
+    // Find transaction by code
+    let transaction = await Transaction.findOne({
+      uniqueCode: code,
+      status: 'paid'
+    });
+
+    if (!transaction) {
+      return res.status(404).json({ error: 'Invalid purchase code' });
+    }
+
+    // CRITICAL: Check if user has completed all 3 levels before incrementing seat
+    const GameProgress = require('../models/GameProgress');
+    const transactionProductId = transaction.productId?._id || transaction.productId?.id || transaction.productId;
+    
+    // Only check GameProgress for THIS specific productId
+    const userProgress = await GameProgress.find({ 
+      userId: req.userId,
+      productId: transactionProductId
+    });
+    
+    const level1Complete = userProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
+    const level2Complete = userProgress.some(p => p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0);
+    const level3Complete = userProgress.some(p => p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0);
+    
+    // Purchase users must complete ALL 3 levels
+    const allLevelsCompleted = level1Complete && level2Complete && level3Complete;
+    
+    console.log(`🔍 [Purchase] Level completion check for user ${req.userId}, productId: ${transactionProductId}`);
+    console.log(`🔍 [Purchase] L1=${level1Complete}, L2=${level2Complete}, L3=${level3Complete}, All=${allLevelsCompleted}`);
+    
+    // If required levels are not completed yet, return error
+    if (!allLevelsCompleted) {
+      return res.status(400).json({ 
+        error: 'You must complete all 3 levels (Level 1, 2, and 3) before your seat can be counted.',
+        levelsNotCompleted: true,
+        level1Complete,
+        level2Complete,
+        level3Complete
+      });
+    }
+
+    // CRITICAL: If user has completed all 3 levels, check if seat was already incremented
+    // This prevents "Play Again" from incrementing seat again
+    if (allLevelsCompleted) {
+      // Reload transaction to get latest state (including gamePlays)
+      transaction = await Transaction.findById(transaction._id);
+      
+      // Check if user has a gamePlays entry and if their seat was already incremented
+      const userGamePlay = transaction.gamePlays?.find(
+        (play) => play.userId && play.userId.toString() === req.userId.toString()
+      );
+      
+      // CRITICAL: Check if user's seat was already incremented (completed flag = true)
+      // gamePlays entry is created when user STARTS playing (without completed flag)
+      // completed flag is set to true ONLY when seat is incremented
+      // So: completed = true → "Play Again" (seat already used)
+      //     completed = false/undefined → First time completion (seat not used yet)
+      if (userGamePlay && userGamePlay.completed === true) {
+        console.log(`⚠️ [Purchase] User has completed all levels AND seat was already incremented - this is "Play Again" scenario`);
+        console.log(`ℹ️ [Purchase] Skipping seat increment - user can play again but seat count will not change`);
+        return res.status(400).json({ 
+          error: 'You have already completed the game with this code. Your seat has been used.',
+          alreadyPlayed: true,
+          seatsFinished: true
+        });
+      }
+      
+      // If levels are completed but gamePlays.completed is false/undefined
+      // This is first time completion (levels just completed, seat not incremented yet)
+      // Proceed with increment - the atomic update will set completed flag
+      console.log(`ℹ️ [Purchase] User has completed all 3 levels for the first time - proceeding with seat increment`);
+    }
+
+    // Check if seats are available
+    const maxSeats = transaction.maxSeats || 5;
+    if (transaction.usedSeats >= maxSeats) {
+      return res.status(400).json({ 
+        error: `You have only ${maxSeats} seat${maxSeats > 1 ? 's' : ''}. Your seats are completed.`,
+        seatsFull: true
+      });
+    }
+
+    // CRITICAL: Reload transaction again to get latest state before checking gamePlays
+    // This ensures we have the most up-to-date gamePlays data
+    transaction = await Transaction.findById(transaction._id);
+    
+    // Check if user's seat was already incremented (prevent duplicate increments)
+    // Check if user already has a completed game play entry
+    transaction.gamePlays = transaction.gamePlays || [];
+    const existingPlayIndex = transaction.gamePlays.findIndex(
+      (play) => play.userId && play.userId.toString() === req.userId.toString()
+    );
+    
+    // CRITICAL: Check if user's seat was already incremented (completed flag = true)
+    // gamePlays entry is created when user STARTS playing (without completed flag)
+    // completed flag is set to true ONLY when seat is incremented
+    // So: completed = true → "Play Again" (seat already used) → Don't increment
+    //     completed = false/undefined → First time completion (seat not used yet) → Increment
+    const userGamePlayEntry = existingPlayIndex >= 0 ? transaction.gamePlays[existingPlayIndex] : null;
+    if (allLevelsCompleted && userGamePlayEntry && userGamePlayEntry.completed === true) {
+      console.log(`⚠️ [Purchase] User has completed all levels AND seat was already incremented - this is "Play Again" scenario`);
+      console.log(`ℹ️ [Purchase] Skipping seat increment - user can play again but seat count will not change`);
+      return res.status(400).json({ 
+        error: 'You have already completed the game with this code. Your seat has been used.',
+        alreadyPlayed: true,
+        seatsFinished: true
+      });
+    }
+    
+    // Use atomic update to prevent race conditions and duplicate increments
+    // Only increment if user's game play is not already completed
+    const updateQuery = { $inc: { usedSeats: 1 } };
+    
+    // Update or add game play entry
+    if (existingPlayIndex >= 0) {
+      updateQuery.$set = {
+        [`gamePlays.${existingPlayIndex}.completed`]: true,
+        [`gamePlays.${existingPlayIndex}.completedAt`]: new Date()
+      };
+    } else {
+      updateQuery.$push = {
+        gamePlays: {
+          userId: req.userId,
+          startedAt: new Date(),
+          completed: true,
+          completedAt: new Date()
+        }
+      };
+    }
+    
+    // Check if all seats will be used after increment
+    const newUsedSeats = (transaction.usedSeats || 0) + 1;
+    if (newUsedSeats >= maxSeats) {
+      if (!updateQuery.$set) updateQuery.$set = {};
+      // Don't update status, keep it as 'paid'
+    }
+    
+    // Use findOneAndUpdate with condition to prevent duplicate increment
+    // Only update if user's gamePlays entry doesn't have completed = true
+    // This allows first time completion (gamePlays exists but completed = false/undefined)
+    // But prevents "Play Again" (gamePlays exists and completed = true)
+    const updatedTransaction = await Transaction.findOneAndUpdate(
+      {
+        _id: transaction._id,
+        $or: [
+          { gamePlays: { $exists: false } },
+          { gamePlays: { $size: 0 } },
+          {
+            gamePlays: {
+              $not: {
+                $elemMatch: {
+                  userId: req.userId,
+                  completed: true
+                }
+              }
+            }
+          }
+        ]
+      },
+      updateQuery,
+      { new: true }
+    );
+
+    if (!updatedTransaction) {
+      return res.status(400).json({ 
+        error: 'You have already completed the game with this code. Your seat has been used.',
+        alreadyPlayed: true,
+        seatsFinished: true
+      });
+    }
+
+    transaction = updatedTransaction;
+
+    // Update organization/school seatUsage if transaction belongs to one
+    if (transaction.organizationId) {
+      try {
+        const Organization = require('../models/Organization');
+        const organization = await Organization.findById(transaction.organizationId);
+        if (organization) {
+          const orgTransactions = await Transaction.find({ 
+            organizationId: transaction.organizationId,
+            status: 'paid'
+          });
+          const orgFreeTrials = await FreeTrial.find({ 
+            organizationId: transaction.organizationId
+          });
+          const transactionUsedSeats = orgTransactions.reduce((sum, tx) => sum + (tx.usedSeats || 0), 0);
+          const freeTrialUsedSeats = orgFreeTrials.reduce((sum, ft) => sum + (ft.usedSeats || 0), 0);
+          const totalUsedSeats = transactionUsedSeats + freeTrialUsedSeats;
+          
+          if (!organization.seatUsage) {
+            organization.seatUsage = { seatLimit: 0, usedSeats: 0, status: 'prospect' };
+          }
+          organization.seatUsage.usedSeats = totalUsedSeats;
+          await organization.save();
+        }
+      } catch (err) {
+        console.error('Error updating organization seatUsage:', err);
+      }
+    }
+    
+    if (transaction.schoolId) {
+      try {
+        const School = require('../models/School');
+        const school = await School.findById(transaction.schoolId);
+        if (school) {
+          const schoolTransactions = await Transaction.find({ 
+            schoolId: transaction.schoolId,
+            status: 'paid'
+          });
+          const totalUsedSeats = schoolTransactions.reduce((sum, tx) => sum + (tx.usedSeats || 0), 0);
+          
+          if (!school.seatUsage) {
+            school.seatUsage = { seatLimit: 0, usedSeats: 0, status: 'prospect' };
+          }
+          school.seatUsage.usedSeats = totalUsedSeats;
+          await school.save();
+        }
+      } catch (err) {
+        console.error('Error updating school seatUsage:', err);
+      }
+    }
+
+    res.json({
+      message: 'Seat incremented successfully',
+      transaction: {
+        ...transaction.toObject(),
+        remainingSeats: transaction.maxSeats - transaction.usedSeats,
+        maxSeats: transaction.maxSeats,
+        usedSeats: transaction.usedSeats,
+      },
+    });
+  } catch (error) {
+    console.error('Error incrementing seat on completion:', error);
+    res.status(500).json({ error: 'Server error: ' + error.message });
   }
 });
 

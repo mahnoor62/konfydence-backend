@@ -28,6 +28,11 @@ const CardSchema = new Schema(
       type: String,
       enum: ['B2C', 'B2B', 'B2E']
     }],
+    // isDemo: {
+    //   type: Boolean,
+    //   default: false,
+    //   comment: 'True if this card is for demo users only'
+    // },
     tags: [{
       type: String,
       trim: true

@@ -29,7 +29,7 @@ const generateUniqueCode = () => {
 // Create free trial
 router.post('/create', authenticateToken, async (req, res) => {
   try {
-    const { packageId, productId } = req.body;
+    const { packageId, productId, targetAudience } = req.body;
     
     if (!packageId) {
       return res.status(400).json({ error: 'Package ID is required' });
@@ -40,60 +40,7 @@ router.post('/create', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Check product's target audience if productId is provided
-    // B2B = businesses, B2E = schools
-    let isEligibleForTrial = false;
-    
-    if (productId) {
-      const product = await Product.findById(productId);
-      if (product && product.targetAudience) {
-        // If product is for businesses (B2B) or schools (B2E), allow free trial
-        if (product.targetAudience === 'businesses' || product.targetAudience === 'schools') {
-          isEligibleForTrial = true;
-        }
-      }
-    }
-    
-    // If not eligible based on product, check user's purchase history (backward compatibility)
-    if (!isEligibleForTrial) {
-      // Check transactions with b2b_contract or b2e_contract type
-      const b2bB2eTransactions = await Transaction.find({
-        userId: req.userId,
-        status: 'paid',
-        $or: [
-          { type: 'b2b_contract' },
-          { type: 'b2e_contract' }
-        ]
-      }).populate('packageId', 'targetAudiences');
-
-      // Also check if user has purchased packages with B2B or B2E target audiences
-      const allPaidTransactions = await Transaction.find({
-        userId: req.userId,
-        status: 'paid',
-        packageId: { $exists: true, $ne: null }
-      }).populate('packageId', 'targetAudiences');
-
-      // Check if any transaction has a package with B2B or B2E target audience
-      const hasB2bB2ePackage = allPaidTransactions.some(transaction => {
-        if (!transaction.packageId || !transaction.packageId.targetAudiences) {
-          return false;
-        }
-        return transaction.packageId.targetAudiences.includes('B2B') || 
-               transaction.packageId.targetAudiences.includes('B2E');
-      });
-
-      // User must have either b2b_contract/b2e_contract transaction OR purchased a B2B/B2E package
-      if (b2bB2eTransactions.length > 0 || hasB2bB2ePackage) {
-        isEligibleForTrial = true;
-      }
-    }
-
-    // If still not eligible, return error
-    if (!isEligibleForTrial) {
-      return res.status(403).json({ 
-        error: 'Free trial is only available for users who have purchased B2B or B2E packages' 
-      });
-    }
+    // Restriction removed - anyone can create free trial now
 
     // Check if user already has an active free trial
     const existingTrial = await FreeTrial.findOne({
@@ -120,9 +67,33 @@ router.post('/create', authenticateToken, async (req, res) => {
     // Free trial users always get 2 seats (fixed, not from package)
     const maxSeats = 2;
 
-    // Create free trial (7 days from now)
-    const endDate = new Date();
-    endDate.setDate(endDate.getDate() + 7);
+    // Determine if this is a demo user
+    // If targetAudience is provided, it's a demo request
+    const isDemo = !!targetAudience; // true if targetAudience exists
+
+    // Create free trial (7 days from now for regular, 14 days for demos)
+    // Use milliseconds to ensure accuracy (avoiding setDate issues with month boundaries)
+    const startDate = new Date();
+    let endDate;
+    
+    if (isDemo) {
+      // Demos get exactly 14 days including current day (13 days added to start date)
+      // Example: If start is Jan 1, end is Jan 14 (14 days total: Jan 1, 2, 3...14)
+      const thirteenDaysInMs = 13 * 24 * 60 * 60 * 1000;
+      endDate = new Date(startDate.getTime() + thirteenDaysInMs);
+      
+      // Verify the calculation (including start day in count)
+      const daysDiff = Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1; // +1 to include start day
+      if (daysDiff !== 14) {
+        console.error(`❌ Error: Demo end date calculation resulted in ${daysDiff} days instead of 14. Recalculating...`);
+        endDate = new Date(startDate.getTime() + thirteenDaysInMs);
+      }
+      console.log(`📅 Demo trial date: startDate=${startDate.toISOString()}, endDate=${endDate.toISOString()}, duration=${daysDiff} days (should be 14, including start day)`);
+    } else {
+      // Regular free trials get exactly 7 days including current day (6 days added to start date)
+      const sixDaysInMs = 6 * 24 * 60 * 60 * 1000;
+      endDate = new Date(startDate.getTime() + sixDaysInMs);
+    }
 
     const freeTrial = await FreeTrial.create({
       userId: req.userId,
@@ -130,11 +101,13 @@ router.post('/create', authenticateToken, async (req, res) => {
       packageId: packageId,
       productId: productId ? productId : null,
       uniqueCode: uniqueCode,
-      startDate: new Date(),
+      startDate: startDate,
       endDate: endDate,
       maxSeats: maxSeats, // Fixed 2 seats for free trial users
       usedSeats: 0,
       status: 'active',
+      isDemo: isDemo, // true if targetAudience provided (demo), false otherwise (purchased)
+      targetAudience: targetAudience || null, // Store target audience if provided
     });
 
     res.status(201).json({
@@ -203,6 +176,7 @@ router.post('/use-code', authenticateToken, async (req, res) => {
       uniqueCode: code,
     })
       .populate('packageId', 'name')
+      .populate('productId', 'name level1 level2 level3')
       .populate('organizationId', 'name ownerId');
 
     if (!freeTrial) {
@@ -219,11 +193,20 @@ router.post('/use-code', authenticateToken, async (req, res) => {
       isExpired: new Date() > new Date(freeTrial.endDate),
     });
 
-    // Check if trial is expired
-    if (new Date() > new Date(freeTrial.endDate)) {
+    // Check if trial is expired (compare dates, not times)
+    const now = new Date();
+    const endDate = new Date(freeTrial.endDate);
+    // Set time to end of day for endDate to allow play on expiry date
+    endDate.setHours(23, 59, 59, 999);
+    const isExpired = now > endDate;
+    
+    if (isExpired) {
       freeTrial.status = 'expired';
       await freeTrial.save();
-      return res.status(400).json({ error: 'This trial code has expired' });
+      return res.status(400).json({ 
+        error: 'Demo has expired. You cannot play the game.',
+        isExpired: true
+      });
     }
 
     // Check if trial is still active
@@ -426,15 +409,18 @@ router.get('/check-code/:code', async (req, res) => {
     const freeTrial = await FreeTrial.findOne({
       uniqueCode: code,
     })
-      .populate('packageId', 'name');
+      .populate('packageId', 'name')
+      .populate('productId', 'name level1 level2 level3');
 
     if (!freeTrial) {
       return res.json({ valid: false, message: 'Invalid code' });
     }
 
-    // Check if trial is expired
+    // Check if trial is expired (compare dates, not times)
     const now = new Date();
     const endDate = new Date(freeTrial.endDate);
+    // Set time to end of day for endDate to allow play on expiry date
+    endDate.setHours(23, 59, 59, 999);
     const isExpired = now > endDate;
     
     if (isExpired) {
@@ -445,7 +431,7 @@ router.get('/check-code/:code', async (req, res) => {
       }
       return res.json({ 
         valid: false, 
-        message: 'Free trial has expired. You cannot play the game.',
+        message: 'Demo has expired. You cannot play the game.',
         isExpired: true
       });
     }
@@ -460,36 +446,66 @@ router.get('/check-code/:code', async (req, res) => {
     const remainingSeats = maxSeats - freeTrial.usedSeats;
     const seatsFull = freeTrial.usedSeats >= maxSeats;
     
-    if (seatsFull) {
-      return res.json({ 
-        valid: false, 
-        message: `You have only ${maxSeats} seat${maxSeats > 1 ? 's' : ''}. Your seats are completed.`,
-        seatsFull: true,
-        remainingSeats: 0,
-        maxSeats: maxSeats,
-        usedSeats: freeTrial.usedSeats,
-        isExpired: false
-      });
-    }
-
     // Check if current user has already played (if userId is available from query or auth)
-    // Note: This endpoint is public, so we can't check user here, but we'll check in use-code and start-game-play
-    const userId = req.query.userId || req.userId; // Try to get from query or auth if available
+    const userId = req.query.userId || req.userId;
     let hasUserPlayed = false;
+    let userSeatUsed = false;
+    
     if (userId) {
       hasUserPlayed = freeTrial.gamePlays?.some(
         (play) => play.userId && play.userId.toString() === userId.toString()
       );
+      
+      // Check if user has completed required levels (seat used)
+      // For B2C: Only Level 1 required
+      // For B2B/B2E: All 3 levels required
+      if (hasUserPlayed) {
+        const GameProgress = require('../models/GameProgress');
+        const userProgress = await GameProgress.find({ userId: userId });
+        
+        const level1Complete = userProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
+        const level2Complete = userProgress.some(p => p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0);
+        const level3Complete = userProgress.some(p => p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0);
+        
+        // Check based on targetAudience
+        const targetAudience = freeTrial.targetAudience;
+        if (targetAudience === 'B2C') {
+          userSeatUsed = level1Complete; // B2C: Only Level 1 required
+        } else if (targetAudience === 'B2B' || targetAudience === 'B2E') {
+          userSeatUsed = level1Complete && level2Complete && level3Complete; // B2B/B2E: All 3 levels required
+        } else {
+          // Default: All 3 levels required (for non-demo users)
+          userSeatUsed = level1Complete && level2Complete && level3Complete;
+        }
+      }
     }
-
-    // Only block if seats are full (which happens after all 3 levels are completed)
-    // If user is in gamePlays but seats aren't full, they can resume
-    if (hasUserPlayed && seatsFull) {
+    
+    // If all seats are used, show message
+    if (seatsFull) {
       return res.json({ 
         valid: false, 
-        message: 'You have already completed all levels with this code. Your seats are finished.',
-        alreadyPlayed: true,
-        seatsFinished: true,
+        message: 'All seats have been used.',
+        seatsFull: true,
+        remainingSeats: 0,
+        maxSeats: maxSeats,
+        usedSeats: freeTrial.usedSeats,
+        isExpired: false,
+        hasUserPlayed: hasUserPlayed,
+        userSeatUsed: userSeatUsed
+      });
+    }
+    
+    // If user has used their seat but seats are still available
+    if (userSeatUsed && !seatsFull) {
+      return res.json({ 
+        valid: false, 
+        message: `You have already completed the game with this code. Your seat has been used.`,
+        userSeatUsed: true,
+        alreadyPlayed: true, // Add this for frontend check
+        seatsFinished: false, // User's seat is finished, but other seats may be available
+        remainingSeats: remainingSeats,
+        maxSeats: maxSeats,
+        usedSeats: freeTrial.usedSeats,
         isExpired: false
       });
     }
@@ -507,7 +523,9 @@ router.get('/check-code/:code', async (req, res) => {
         expiresAt: freeTrial.endDate,
         endDate: freeTrial.endDate,
         seatsAvailable: remainingSeats > 0,
-        hasUserPlayed: hasUserPlayed // Indicate if user has already played
+        hasUserPlayed: hasUserPlayed, // Indicate if user has already played
+        isDemo: freeTrial.isDemo || false, // Track if this is a demo user
+        targetAudience: freeTrial.targetAudience || null // Include target audience for demo users
       },
     });
   } catch (error) {
@@ -706,6 +724,212 @@ router.post('/start-game-play', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Error starting game play:', error);
+    res.status(500).json({ error: 'Server error: ' + error.message });
+  }
+});
+
+// Increment seat when demo user completes game (all cards)
+router.post('/increment-seat-on-completion', authenticateToken, async (req, res) => {
+  try {
+    const { code } = req.body;
+    
+    if (!code) {
+      return res.status(400).json({ error: 'Code is required' });
+    }
+
+    if (!req.userId) {
+      return res.status(401).json({ error: 'User authentication required' });
+    }
+
+    let freeTrial = await FreeTrial.findOne({
+      uniqueCode: code,
+    });
+
+    if (!freeTrial) {
+      return res.status(404).json({ error: 'Invalid trial code' });
+    }
+
+    // Check if this is a demo (has targetAudience)
+    if (!freeTrial.targetAudience) {
+      return res.status(400).json({ error: 'This endpoint is only for demo users' });
+    }
+
+    // CRITICAL: Check if user has completed all required levels before incrementing seat
+    const GameProgress = require('../models/GameProgress');
+    const userProgress = await GameProgress.find({ userId: req.userId });
+    
+    const level1Complete = userProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
+    const level2Complete = userProgress.some(p => p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0);
+    const level3Complete = userProgress.some(p => p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0);
+    
+    // For B2C: Only Level 1 required
+    // For B2B/B2E: All 3 levels required
+    const targetAudience = freeTrial.targetAudience;
+    let allRequiredLevelsCompleted = false;
+    
+    if (targetAudience === 'B2C') {
+      allRequiredLevelsCompleted = level1Complete;
+    } else if (targetAudience === 'B2B' || targetAudience === 'B2E') {
+      allRequiredLevelsCompleted = level1Complete && level2Complete && level3Complete;
+    }
+    
+    // CRITICAL: If user has completed required levels, check if seat was already incremented
+    // This prevents "Play Again" from incrementing seat again
+    if (allRequiredLevelsCompleted) {
+      // Reload freeTrial to get latest state (including gamePlays)
+      freeTrial = await FreeTrial.findById(freeTrial._id);
+      
+      // Check if user has a gamePlays entry and if their seat was already incremented
+      const userGamePlay = freeTrial.gamePlays?.find(
+        (play) => play.userId && play.userId.toString() === req.userId.toString()
+      );
+      
+      // CRITICAL: Check if user's seat was already incremented (completed flag = true)
+      // gamePlays entry is created when user STARTS playing (without completed flag)
+      // completed flag is set to true ONLY when seat is incremented
+      // So: completed = true → "Play Again" (seat already used)
+      //     completed = false/undefined → First time completion (seat not used yet)
+      if (userGamePlay && userGamePlay.completed === true) {
+        console.log(`⚠️ User has completed required levels AND seat was already incremented - this is "Play Again" scenario`);
+        console.log(`ℹ️ Skipping seat increment - user can play again but seat count will not change`);
+        return res.status(400).json({ 
+          error: 'You have already completed the game with this code. Your seat has been used.',
+          alreadyPlayed: true,
+          seatsFinished: true
+        });
+      }
+      
+      // If levels are completed but gamePlays.completed is false/undefined
+      // This is first time completion (levels just completed, seat not incremented yet)
+      // Proceed with increment - the atomic update will set completed flag
+      console.log(`ℹ️ User has completed required levels for the first time - proceeding with seat increment`);
+    }
+    
+    // If required levels are not completed yet, return error
+    if (!allRequiredLevelsCompleted) {
+      const requiredLevels = targetAudience === 'B2C' ? 'Level 1' : 'all 3 levels (Level 1, 2, and 3)';
+      return res.status(400).json({ 
+        error: `You must complete ${requiredLevels} before your seat can be counted.`,
+        levelsNotCompleted: true,
+        level1Complete,
+        level2Complete,
+        level3Complete
+      });
+    }
+
+    // Check if seats are available
+    const maxSeats = freeTrial.maxSeats || 2;
+    if (freeTrial.usedSeats >= maxSeats) {
+      return res.status(400).json({ 
+        error: `You have only ${maxSeats} seat${maxSeats > 1 ? 's' : ''}. Your seats are completed.`,
+        seatsFull: true
+      });
+    }
+
+    // CRITICAL: Reload freeTrial again to get latest state before checking gamePlays
+    // This ensures we have the most up-to-date gamePlays data
+    freeTrial = await FreeTrial.findById(freeTrial._id);
+    
+    // Check if user's seat was already incremented (prevent duplicate increments)
+    // Check if user already has a completed game play entry
+    freeTrial.gamePlays = freeTrial.gamePlays || [];
+    const existingPlayIndex = freeTrial.gamePlays.findIndex(
+      (play) => play.userId && play.userId.toString() === req.userId.toString()
+    );
+    
+    // CRITICAL: Check if user's seat was already incremented (completed flag = true)
+    // gamePlays entry is created when user STARTS playing (without completed flag)
+    // completed flag is set to true ONLY when seat is incremented
+    // So: completed = true → "Play Again" (seat already used) → Don't increment
+    //     completed = false/undefined → First time completion (seat not used yet) → Increment
+    const userGamePlayEntry = existingPlayIndex >= 0 ? freeTrial.gamePlays[existingPlayIndex] : null;
+    if (allRequiredLevelsCompleted && userGamePlayEntry && userGamePlayEntry.completed === true) {
+      console.log(`⚠️ User has completed required levels AND seat was already incremented - this is "Play Again" scenario`);
+      console.log(`ℹ️ Skipping seat increment - user can play again but seat count will not change`);
+      return res.status(400).json({ 
+        error: 'You have already completed the game with this code. Your seat has been used.',
+        alreadyPlayed: true,
+        seatsFinished: true
+      });
+    }
+    
+    // Use atomic update to prevent race conditions and duplicate increments
+    // Only increment if user's game play is not already completed
+    const updateQuery = { $inc: { usedSeats: 1 } };
+    
+    // Update or add game play entry
+    if (existingPlayIndex >= 0) {
+      updateQuery.$set = {
+        [`gamePlays.${existingPlayIndex}.completed`]: true,
+        [`gamePlays.${existingPlayIndex}.completedAt`]: new Date()
+      };
+    } else {
+      updateQuery.$push = {
+        gamePlays: {
+          userId: req.userId,
+          startedAt: new Date(),
+          completed: true,
+          completedAt: new Date()
+        }
+      };
+    }
+    
+    // Check if all seats will be used after increment
+    const newUsedSeats = (freeTrial.usedSeats || 0) + 1;
+    if (newUsedSeats >= maxSeats) {
+      if (!updateQuery.$set) updateQuery.$set = {};
+      updateQuery.$set.status = 'completed';
+    }
+    
+    // Use findOneAndUpdate with condition to prevent duplicate increment
+    // Only update if user's gamePlays entry doesn't have completed = true
+    // This allows first time completion (gamePlays exists but completed = false/undefined)
+    // But prevents "Play Again" (gamePlays exists and completed = true)
+    const updatedFreeTrial = await FreeTrial.findOneAndUpdate(
+      {
+        _id: freeTrial._id,
+        $or: [
+          { gamePlays: { $exists: false } },
+          { gamePlays: { $size: 0 } },
+          {
+            gamePlays: {
+              $not: {
+                $elemMatch: {
+                  userId: req.userId,
+                  completed: true
+                }
+              }
+            }
+          }
+        ]
+      },
+      updateQuery,
+      { new: true }
+    );
+    
+    if (!updatedFreeTrial) {
+      // Update was skipped because condition wasn't met (user already completed)
+      return res.status(400).json({ 
+        error: 'You have already completed the game with this code. Your seat has been used.',
+        alreadyPlayed: true,
+        seatsFinished: true
+      });
+    }
+    
+    // Update freeTrial reference
+    freeTrial = updatedFreeTrial;
+
+    res.json({
+      message: 'Seat incremented successfully',
+      trial: {
+        ...freeTrial.toObject(),
+        remainingSeats: freeTrial.maxSeats - freeTrial.usedSeats,
+        maxSeats: freeTrial.maxSeats,
+        usedSeats: freeTrial.usedSeats,
+      },
+    });
+  } catch (error) {
+    console.error('Error incrementing seat on completion:', error);
     res.status(500).json({ error: 'Server error: ' + error.message });
   }
 });

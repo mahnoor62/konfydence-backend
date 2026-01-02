@@ -115,8 +115,8 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/user', require('./routes/userDashboard'));
 app.use('/api/user/organizations', require('./routes/userOrganizations'));
 app.use('/api/transactions', require('./routes/transactions'));
-// Demo route removed - using FreeTrial instead
-// app.use('/api/demos', require('./routes/demos'));
+// Demo routes for predefined demos
+app.use('/api/demos', require('./routes/demos'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/migrate', require('./routes/migrateLeads'));
 app.use('/api/admin-management', require('./routes/adminManagement'));

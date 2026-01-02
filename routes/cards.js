@@ -61,15 +61,165 @@ router.get('/public/available-levels', async (req, res) => {
 // Public endpoint for game (no authentication required)
 router.get('/public/game', async (req, res) => {
   try {
-    const { level, packageId, productId } = req.query;
+    const { level, packageId, productId, isDemo, targetAudience } = req.query;
     const Package = require('../models/Package');
     const Product = require('../models/Product');
     
+    // For demo users, use product cards if productId is provided, otherwise fallback to isDemo cards
+    if (isDemo === 'true') {
+      // Priority: If productId is provided for demo, use product cards
+      if (productId) {
+        console.log(`🎮 Demo user with productId: ${productId}, targetAudience: ${targetAudience}, level: ${level}`);
+        
+        const product = await Product.findById(productId).select('level1 level2 level3 type');
+        if (!product) {
+          console.warn(`⚠️ Product ${productId} not found in database`);
+          // Continue to fallback isDemo cards
+        } else {
+          console.log(`📦 Product found: ${product.name || productId}`);
+          console.log(`📊 Product levels - Level1: ${product.level1?.length || 0} cards, Level2: ${product.level2?.length || 0} cards, Level3: ${product.level3?.length || 0} cards`);
+          let cardIds = null;
+          
+          // Get cards for the specific level
+          if (level === '1' && product.level1 && product.level1.length > 0) {
+            cardIds = product.level1.map(id => id.toString());
+            console.log(`📋 Level 1: Found ${cardIds.length} card IDs in product`);
+          } else if (level === '2' && product.level2 && product.level2.length > 0) {
+            cardIds = product.level2.map(id => id.toString());
+            console.log(`📋 Level 2: Found ${cardIds.length} card IDs in product`);
+          } else if (level === '3' && product.level3 && product.level3.length > 0) {
+            cardIds = product.level3.map(id => id.toString());
+            console.log(`📋 Level 3: Found ${cardIds.length} card IDs in product`);
+          } else {
+            console.warn(`⚠️ Product ${productId} has no cards in level ${level} arrays`);
+          }
+          
+          if (cardIds && cardIds.length > 0) {
+            // Fetch cards from product level
+            const cardsMap = {};
+            const fetchedCards = await Card.find({ _id: { $in: cardIds } });
+            
+            console.log(`📦 Fetched ${fetchedCards.length} cards from product level ${level} (requested ${cardIds.length} card IDs)`);
+            
+            // Create a map for quick lookup
+            fetchedCards.forEach(card => {
+              cardsMap[card._id.toString()] = card;
+            });
+            
+            // Maintain the order from product level array
+            const cards = [];
+            cardIds.forEach(cardId => {
+              const card = cardsMap[cardId];
+              if (card) {
+                cards.push(card);
+              } else {
+                console.warn(`⚠️ Card ID ${cardId} not found in database`);
+              }
+            });
+            
+            console.log(`📋 Processing ${cards.length} cards to extract questions`);
+            
+            // Aggregate questions from product cards
+            const allQuestions = [];
+            cards.forEach(card => {
+              if (card.question && card.question.description) {
+                allQuestions.push({
+                  ...card.question.toObject(),
+                  cardId: card._id,
+                  cardTitle: card.title
+                });
+              } else {
+                console.warn(`⚠️ Card ${card._id} (${card.title}) has no question or question description`);
+              }
+            });
+            
+            console.log(`✅ Extracted ${allQuestions.length} questions from ${cards.length} cards`);
+            
+            // If no questions found, return empty but don't fallback to isDemo cards
+            // This allows frontend to show proper error message
+            if (allQuestions.length === 0) {
+              console.warn(`⚠️ No questions found in product cards for level ${level}`);
+              return res.json({
+                level: level ? parseInt(level) : null,
+                questions: [],
+                totalAvailable: 0,
+                error: 'No questions available in product cards for this level'
+              });
+            }
+            
+            // Limit based on target audience: B2C = 30 max, B2B/B2E = 30 per level
+            const maxCards = targetAudience === 'B2C' ? 30 : 30; // 30 per level for all
+            const limitedQuestions = allQuestions.slice(0, maxCards);
+            
+            console.log(`✅ Found ${limitedQuestions.length} product cards for demo (${targetAudience}, level ${level})`);
+            
+            res.json({
+              level: level ? parseInt(level) : null,
+              questions: limitedQuestions,
+              totalAvailable: allQuestions.length
+            });
+            return;
+          } else {
+            console.warn(`⚠️ Product ${productId} has no cards in level ${level} arrays`);
+          }
+        }
+      }
+      
+      // Fallback: If no productId or product has no cards, use isDemo cards
+      const query = {
+        isDemo: true,
+        isDeleted: { $ne: true } // Exclude soft deleted cards
+      };
+      
+      // Filter by target audience if provided
+      if (targetAudience) {
+        query.targetAudiences = targetAudience; // Filter by target audience (B2C, B2B, B2E)
+      }
+      
+      console.log(`🎮 Fetching demo cards (fallback) for targetAudience: ${targetAudience}, level: ${level}, query:`, query);
+      
+      // Fetch cards directly from cards table
+      const fetchedCards = await Card.find(query).sort({ createdAt: -1 }); // Sort by newest first
+      
+      // Aggregate all questions from all filtered cards
+      const allQuestions = [];
+      
+      fetchedCards.forEach(card => {
+        if (card.question && card.question.description) {
+          allQuestions.push({
+            ...card.question.toObject(),
+            cardId: card._id,
+            cardTitle: card.title
+          });
+        }
+      });
+      
+      // Limit based on target audience and level
+      let maxCards = 30; // Default 30 per level
+      if (targetAudience === 'B2C') {
+        maxCards = 30; // B2C gets 30 total (only Level 1)
+      } else if (targetAudience === 'B2B' || targetAudience === 'B2E') {
+        maxCards = 30; // B2B/B2E gets 30 per level (up to 90 total across 3 levels)
+      }
+      
+      const limitedQuestions = allQuestions.slice(0, maxCards);
+      
+      console.log(`✅ Found ${limitedQuestions.length} demo cards for ${targetAudience} (level: ${level || 'all'})`);
+      
+      res.json({
+        level: level ? parseInt(level) : null,
+        questions: limitedQuestions,
+        totalAvailable: allQuestions.length
+      });
+      return;
+    }
+    
+    // Regular users - use product/package logic
     let cardIds = null;
     
     // Priority: productId > packageId
     if (productId) {
-      // Fetch cards from product's level arrays based on level
+      // Regular users - fetch cards from product's level arrays based on level
       const product = await Product.findById(productId).select('level1 level2 level3 type');
       if (product) {
         // Get cards for the specific level
@@ -80,15 +230,15 @@ router.get('/public/game', async (req, res) => {
         } else if (level === '3' && product.level3 && product.level3.length > 0) {
           cardIds = product.level3.map(id => id.toString());
         }
-        
-        // If no cards for this level, return empty
-        if (!cardIds || cardIds.length === 0) {
-          return res.json({
-            level: level ? parseInt(level) : null,
-            questions: [],
-            totalAvailable: 0
-          });
-        }
+      }
+      
+      // If no cards for this level, return empty
+      if (!cardIds || cardIds.length === 0) {
+        return res.json({
+          level: level ? parseInt(level) : null,
+          questions: [],
+          totalAvailable: 0
+        });
       }
     } else if (packageId) {
       // Fallback to package if no productId
@@ -148,10 +298,12 @@ router.get('/public/game', async (req, res) => {
       }
     });
     
-    // Return aggregated questions (limit to 30 for game)
+    // Return aggregated questions
+    // For regular users, limit to 30 per level
+    const limit = 30;
     res.json({
       level: level ? parseInt(level) : null,
-      questions: allQuestions.slice(0, 30),
+      questions: allQuestions.slice(0, limit),
       totalAvailable: allQuestions.length
     });
   } catch (error) {
@@ -271,6 +423,7 @@ router.post(
         category: req.body.category || '',
         visibility: req.body.visibility || 'public',
         targetAudiences: req.body.targetAudiences || [],
+        isDemo: req.body.isDemo || false,
         tags: req.body.tags || [],
         question: question
       };
@@ -324,6 +477,7 @@ router.put(
       if (req.body.category !== undefined) updateData.category = req.body.category;
       if (req.body.visibility !== undefined) updateData.visibility = req.body.visibility;
       if (req.body.targetAudiences !== undefined) updateData.targetAudiences = req.body.targetAudiences;
+      if (req.body.isDemo !== undefined) updateData.isDemo = req.body.isDemo;
       if (req.body.tags !== undefined) updateData.tags = req.body.tags;
       
       // Only update question if it is explicitly provided

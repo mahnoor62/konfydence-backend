@@ -51,6 +51,22 @@ const FreeTrialSchema = new Schema(
       enum: ['active', 'expired', 'completed'],
       default: 'active',
     },
+    targetAudience: {
+      type: String,
+      enum: ['B2C', 'B2B', 'B2E'],
+      index: true,
+      comment: 'Target audience for this demo/trial (B2C, B2B, or B2E)'
+    },
+    cardQuantity: {
+      type: Number,
+      comment: 'Number of cards available in this demo (30 for B2C, 90 for B2B/B2E)'
+    },
+    isDemo: {
+      type: Boolean,
+      default: false,
+      index: true,
+      comment: 'True if this is a demo user (created via demo request), false if purchased user'
+    },
     referrals: [
       {
         referredUserId: {

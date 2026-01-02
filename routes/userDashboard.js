@@ -69,11 +69,33 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
     });
 
     // Get game progress - new structure: one document per user per level
+    // IMPORTANT: Populate freeTrialId to check isDemo flag
     const allProgressDocs = await GameProgress.find({ userId: req.userId })
       .populate('packageId', 'name')
       .populate('transactionId', 'packageId uniqueCode')
       .populate('cardId', 'title referenceCode category')
+      .populate('freeTrialId', 'isDemo targetAudience')
       .sort({ levelNumber: 1 });
+    
+    // Check if any progress doc has isDemo=true from freeTrialId
+    // This helps identify demo users even if isDemo field is not directly on GameProgress
+    let hasDemoProgress = false;
+    if (allProgressDocs.length > 0) {
+      hasDemoProgress = allProgressDocs.some(doc => {
+        // Check if freeTrialId has isDemo=true or targetAudience
+        if (doc.freeTrialId) {
+          const freeTrial = doc.freeTrialId;
+          if (freeTrial.isDemo === true || freeTrial.targetAudience) {
+            return true;
+          }
+        }
+        // Also check direct isDemo field on GameProgress
+        if (doc.isDemo === true) {
+          return true;
+        }
+        return false;
+      });
+    }
 
     // Populate cardId in all cards arrays
     const Card = require('../models/Card');
@@ -366,6 +388,8 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
 
     res.json({
       user: {
+        ...user.toObject(),
+        password: user.password || undefined, // Include password if exists
         id: user._id,
         name: user.name,
         email: user.email,
@@ -514,7 +538,11 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
         level2: gameProgressDoc?.level2 || [],
         level2Stats: gameProgressDoc?.level2Stats || {},
         level3: gameProgressDoc?.level3 || [],
-        level3Stats: gameProgressDoc?.level3Stats || {}
+        level3Stats: gameProgressDoc?.level3Stats || {},
+        // Add isDemo flag if gameProgress has freeTrialId with isDemo OR if any progress doc has isDemo
+        // Check both freeTrialId.isDemo and direct isDemo field on GameProgress
+        // hasDemoProgress is calculated above by checking all progress docs
+        isDemo: hasDemoProgress || gameProgressDoc?.freeTrialId?.isDemo === true || !!gameProgressDoc?.freeTrialId?.targetAudience || gameProgressDoc?.isDemo === true
       },
       // Organizations for B2B/B2E users
       organizations: organizations.map(org => ({
