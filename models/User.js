@@ -14,11 +14,6 @@ const UserSchema = new Schema(
       type: String,
       required: true
     },
-    password: {
-      type: String,
-      // Plain text password for display purposes only (NOT used for authentication)
-      // This is a security risk but added per user request
-    },
     name: {
       type: String,
       trim: true

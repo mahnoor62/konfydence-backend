@@ -275,11 +275,252 @@ router.post('/', authenticateToken, async (req, res) => {
         if (demoFreeTrial) {
           console.log(`🎮 Demo user detected - skipping seat increment in gameProgress (will be handled by increment-seat-on-completion endpoint)`);
         } else {
-          // CRITICAL: For purchase users, seat increment is now handled by payments/increment-seat-on-completion endpoint
-          // Skip seat increment here to prevent duplicate increments and keep flows separate
-          console.log(`💰 Purchase user detected - skipping seat increment in gameProgress (will be handled by payments/increment-seat-on-completion endpoint)`);
-          // Seat increment for purchase users is now handled by a separate endpoint in payments.js
-          // This keeps demo and purchase flows completely separate
+          // For non-demo users, proceed with seat increment logic
+          // Check if user has completed all 3 levels NOW (after this save)
+          const allProgress = await GameProgress.find({ 
+            userId: req.userId
+          });
+          
+          const level1Complete = allProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
+          const level2Complete = allProgress.some(p => p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0);
+          const level3Complete = allProgress.some(p => p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0);
+          
+          const allLevelsCompleted = level1Complete && level2Complete && level3Complete;
+          
+          // Use the wasAlreadyCompletedBefore check we did BEFORE saving progress
+          // This ensures we only increment once when user first completes all 3 levels
+          const isFirstTimeCompletion = allLevelsCompleted && !wasAlreadyCompletedBefore;
+          
+          console.log(`🔍 Seat increment check: allLevelsCompleted=${allLevelsCompleted}, wasAlreadyCompletedBefore=${wasAlreadyCompletedBefore}, isFirstTimeCompletion=${isFirstTimeCompletion}`);
+          
+          if (isFirstTimeCompletion) {
+            console.log(`🎉 User ${req.userId} has completed all 3 levels for the first time - incrementing seat count`);
+            console.log(`🔍 Debug: wasAlreadyCompletedBefore = ${wasAlreadyCompletedBefore}, allLevelsCompleted = ${allLevelsCompleted}`);
+            
+            // Find transaction or free trial where this user is in gamePlays
+            // Try to find transaction first
+            const transactions = await Transaction.find({
+              'gamePlays.userId': req.userId,
+              status: 'paid'
+            }).sort({ createdAt: -1 });
+            
+            // Find matching transaction by productId (prefer most recent)
+            let transaction = null;
+            for (const tx of transactions) {
+              const txProductId = tx.productId?._id?.toString() || tx.productId?.toString();
+              const progressProductId = productId?.toString();
+              if (txProductId === progressProductId) {
+                transaction = tx;
+                break;
+              }
+            }
+            
+            // If no transaction found, try free trial
+            let freeTrial = null;
+            if (!transaction) {
+              const freeTrials = await FreeTrial.find({
+                'gamePlays.userId': req.userId,
+                status: { $in: ['active', 'completed'] }
+              }).sort({ createdAt: -1 });
+              
+              for (const ft of freeTrials) {
+                const ftProductId = ft.productId?._id?.toString() || ft.productId?.toString();
+                const progressProductId = productId?.toString();
+                if (ftProductId === progressProductId) {
+                  freeTrial = ft;
+                  break;
+                }
+              }
+            }
+            
+            // CRITICAL: Skip seat increment for demo users (B2C, B2B, B2E)
+            // Demo users' seat increment is handled by increment-seat-on-completion endpoint
+            // This prevents duplicate increments
+            if (freeTrial && (freeTrial.isDemo || freeTrial.targetAudience)) {
+              console.log(`🎮 Demo user detected (${freeTrial.targetAudience || 'unknown'}) - skipping seat increment in gameProgress`);
+              console.log(`ℹ️ Seat increment for demo users is handled by increment-seat-on-completion endpoint`);
+              // Skip the rest of the seat increment logic for demo users - just continue to next part
+            } else {
+          
+              // Increment seat for transaction if found (non-demo users only)
+              if (transaction) {
+                // Use atomic increment to prevent race conditions
+                const oldUsedSeats = transaction.usedSeats || 0;
+                const updatedTransaction = await Transaction.findByIdAndUpdate(
+                  transaction._id,
+                  { $inc: { usedSeats: 1 } },
+                  { new: true } // Return updated document
+                );
+                
+                console.log(`✅ Incremented usedSeats for transaction ${transaction._id}: ${oldUsedSeats} -> ${updatedTransaction.usedSeats}`);
+                
+                // Update transaction reference for organization/school updates
+                transaction = updatedTransaction;
+                
+                // Update organization/school seatUsage if transaction belongs to one
+                if (transaction.organizationId) {
+              try {
+                const Organization = require('../models/Organization');
+                const organization = await Organization.findById(transaction.organizationId);
+                if (organization) {
+                  const orgTransactions = await Transaction.find({ 
+                    organizationId: transaction.organizationId,
+                    status: 'paid'
+                  });
+                  const orgFreeTrials = await FreeTrial.find({ 
+                    organizationId: transaction.organizationId
+                  });
+                  const transactionUsedSeats = orgTransactions.reduce((sum, tx) => sum + (tx.usedSeats || 0), 0);
+                  const freeTrialUsedSeats = orgFreeTrials.reduce((sum, ft) => sum + (ft.usedSeats || 0), 0);
+                  const totalUsedSeats = transactionUsedSeats + freeTrialUsedSeats;
+                  
+                  if (!organization.seatUsage) {
+                    organization.seatUsage = { seatLimit: 0, usedSeats: 0, status: 'prospect' };
+                  }
+                  organization.seatUsage.usedSeats = totalUsedSeats;
+                  await organization.save();
+                }
+              } catch (err) {
+                console.error('Error updating organization seatUsage:', err);
+              }
+            }
+            
+            if (transaction.schoolId) {
+              try {
+                const School = require('../models/School');
+                const school = await School.findById(transaction.schoolId);
+                if (school) {
+                  const schoolTransactions = await Transaction.find({ 
+                    schoolId: transaction.schoolId,
+                    status: 'paid'
+                  });
+                  const totalUsedSeats = schoolTransactions.reduce((sum, tx) => sum + (tx.usedSeats || 0), 0);
+                  
+                  if (!school.seatUsage) {
+                    school.seatUsage = { seatLimit: 0, usedSeats: 0, status: 'prospect' };
+                  }
+                  school.seatUsage.usedSeats = totalUsedSeats;
+                  await school.save();
+                }
+              } catch (err) {
+                console.error('Error updating school seatUsage:', err);
+              }
+            }
+          } else if (freeTrial) {
+            // CRITICAL: Check if user has already completed (prevent duplicate increment)
+            // Reload free trial to get latest state
+            const currentFreeTrial = await FreeTrial.findById(freeTrial._id);
+            const hasUserCompleted = currentFreeTrial.gamePlays?.some(
+              (play) => play.userId && play.userId.toString() === req.userId.toString() && play.completed
+            );
+            
+            if (hasUserCompleted) {
+              console.log(`⚠️ User ${req.userId} has already completed - skipping seat increment`);
+              freeTrial = currentFreeTrial; // Use current state
+            } else {
+              // Use atomic increment with condition to prevent race conditions
+              // Only increment if user hasn't completed yet
+              const userPlayIndex = currentFreeTrial.gamePlays?.findIndex(
+                (play) => play.userId && play.userId.toString() === req.userId.toString()
+              );
+              
+              const newUsedSeats = (currentFreeTrial.usedSeats || 0) + 1;
+              const maxSeats = currentFreeTrial.maxSeats || 2;
+              
+              // Build update query with atomic operations
+              let updateQuery = { $inc: { usedSeats: 1 } };
+              
+              // Update or add game play entry
+              if (userPlayIndex >= 0) {
+                // Update existing game play entry
+                updateQuery.$set = {
+                  [`gamePlays.${userPlayIndex}.completed`]: true,
+                  [`gamePlays.${userPlayIndex}.completedAt`]: new Date()
+                };
+              } else {
+                // Add new game play entry
+                updateQuery.$push = {
+                  gamePlays: {
+                    userId: req.userId,
+                    startedAt: new Date(),
+                    completed: true,
+                    completedAt: new Date()
+                  }
+                };
+              }
+              
+              // Update status if all seats will be used
+              if (newUsedSeats >= maxSeats) {
+                if (!updateQuery.$set) updateQuery.$set = {};
+                updateQuery.$set.status = 'completed';
+              }
+              
+              // Use findOneAndUpdate with condition to prevent duplicate increment
+              // Only update if user's game play is not already completed
+              const updatedFreeTrial = await FreeTrial.findOneAndUpdate(
+                {
+                  _id: freeTrial._id,
+                  $or: [
+                    { 'gamePlays': { $exists: false } },
+                    { 'gamePlays': { $size: 0 } },
+                    { 
+                      'gamePlays': { 
+                        $not: { 
+                          $elemMatch: { 
+                            userId: req.userId, 
+                            completed: true 
+                          } 
+                        } 
+                      } 
+                    }
+                  ]
+                },
+                updateQuery,
+                { new: true }
+              );
+              
+              if (updatedFreeTrial) {
+                console.log(`✅ Incremented usedSeats for free trial ${freeTrial._id}: ${currentFreeTrial.usedSeats || 0} -> ${updatedFreeTrial.usedSeats}`);
+                freeTrial = updatedFreeTrial;
+              } else {
+                console.log(`⚠️ Could not increment seat - user may have already completed or condition not met`);
+                // Reload to get current state
+                freeTrial = await FreeTrial.findById(freeTrial._id);
+              }
+            }
+            
+            // Update organization seatUsage if free trial belongs to one
+            if (freeTrial.organizationId) {
+              try {
+                const Organization = require('../models/Organization');
+                const organization = await Organization.findById(freeTrial.organizationId);
+                if (organization) {
+                  const orgTransactions = await Transaction.find({ 
+                    organizationId: freeTrial.organizationId,
+                    status: 'paid'
+                  });
+                  const orgFreeTrials = await FreeTrial.find({ 
+                    organizationId: freeTrial.organizationId
+                  });
+                  const transactionUsedSeats = orgTransactions.reduce((sum, tx) => sum + (tx.usedSeats || 0), 0);
+                  const freeTrialUsedSeats = orgFreeTrials.reduce((sum, ft) => sum + (ft.usedSeats || 0), 0);
+                  const totalUsedSeats = transactionUsedSeats + freeTrialUsedSeats;
+                  
+                  if (!organization.seatUsage) {
+                    organization.seatUsage = { seatLimit: 0, usedSeats: 0, status: 'prospect' };
+                  }
+                  organization.seatUsage.usedSeats = totalUsedSeats;
+                  await organization.save();
+                }
+              } catch (err) {
+                console.error('Error updating organization seatUsage:', err);
+              }
+            }
+          } else {
+            console.log(`⚠️ Could not find transaction or free trial for user ${req.userId} with productId ${productId}`);
+          }
+            }
+          }
         }
       } catch (seatError) {
         // Don't fail progress saving if seat increment fails

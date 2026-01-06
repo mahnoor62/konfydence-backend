@@ -388,8 +388,6 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
 
     res.json({
       user: {
-        ...user.toObject(),
-        password: user.password || undefined, // Include password if exists
         id: user._id,
         name: user.name,
         email: user.email,
