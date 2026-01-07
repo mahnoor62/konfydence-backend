@@ -3,7 +3,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/rbac');
 const Organization = require('../models/Organization');
-// OrgUser model removed - using User table only for static data
+const OrgUser = require('../models/OrgUser');
 const CustomPackage = require('../models/CustomPackage');
 
 const router = express.Router();
@@ -134,7 +134,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
           name: organization.name,
           uniqueCode: organization.uniqueCode
         },
-        orgUsers: [] // Don't show other members to members (OrgUser model removed, using User table only)
+        orgUsers: [] // Don't show other members to members
       });
     }
 
@@ -232,9 +232,21 @@ router.get('/:id', authenticateToken, async (req, res) => {
     // Convert map to array
     const allOrgUsers = Array.from(memberMap.values());
 
+    // Format members properly for frontend
+    const formattedMembers = allOrgUsers.map(item => ({
+      _id: item._id || item.userId?._id,
+      userId: item.userId,
+      organizationId: item.organizationId,
+      assignedCustomPackageIds: item.assignedCustomPackageIds || [],
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt
+    }));
+
     res.json({
       organization,
-      orgUsers: formattedMembers
+      orgUsers: formattedMembers,
+      membersCount: formattedMembers.length,
+      userCount: formattedMembers.length
     });
   } catch (error) {
     console.error('Error fetching organization:', error);

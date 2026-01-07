@@ -731,13 +731,17 @@ router.post('/start-game-play', authenticateToken, async (req, res) => {
 // Increment seat when demo user completes game (all cards)
 router.post('/increment-seat-on-completion', authenticateToken, async (req, res) => {
   try {
+    console.log(`🎯 increment-seat-on-completion called - userId: ${req.userId}, code: ${req.body.code}`);
+    
     const { code } = req.body;
     
     if (!code) {
+      console.log(`❌ Code missing in request`);
       return res.status(400).json({ error: 'Code is required' });
     }
 
     if (!req.userId) {
+      console.log(`❌ UserId missing in request`);
       return res.status(401).json({ error: 'User authentication required' });
     }
 
@@ -746,21 +750,33 @@ router.post('/increment-seat-on-completion', authenticateToken, async (req, res)
     });
 
     if (!freeTrial) {
+      console.log(`❌ Free trial not found for code: ${code}`);
       return res.status(404).json({ error: 'Invalid trial code' });
     }
 
+    console.log(`✅ Free trial found: ${freeTrial._id}, targetAudience: ${freeTrial.targetAudience}, isDemo: ${freeTrial.isDemo}`);
+
     // Check if this is a demo (has targetAudience)
     if (!freeTrial.targetAudience) {
+      console.log(`❌ Not a demo trial (no targetAudience)`);
       return res.status(400).json({ error: 'This endpoint is only for demo users' });
     }
 
-    // CRITICAL: Check if user has completed all required levels before incrementing seat
+    // CRITICAL: For demo users, GameProgress might not be saved (isDemo=true skips save)
+    // So we need to handle this case specially
     const GameProgress = require('../models/GameProgress');
     const userProgress = await GameProgress.find({ userId: req.userId });
+    
+    console.log(`📊 User progress records: ${userProgress.length}`);
+    userProgress.forEach(p => {
+      console.log(`  - Level ${p.levelNumber}: completedAt=${p.completedAt ? 'Yes' : 'No'}, cards=${p.cards?.length || 0}`);
+    });
     
     const level1Complete = userProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
     const level2Complete = userProgress.some(p => p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0);
     const level3Complete = userProgress.some(p => p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0);
+    
+    console.log(`📊 Level completion from GameProgress: L1=${level1Complete}, L2=${level2Complete}, L3=${level3Complete}`);
     
     // For B2C: Only Level 1 required
     // For B2B/B2E: All 3 levels required
@@ -771,6 +787,31 @@ router.post('/increment-seat-on-completion', authenticateToken, async (req, res)
       allRequiredLevelsCompleted = level1Complete;
     } else if (targetAudience === 'B2B' || targetAudience === 'B2E') {
       allRequiredLevelsCompleted = level1Complete && level2Complete && level3Complete;
+    }
+    
+    // SPECIAL HANDLING FOR DEMO USERS: If GameProgress is not available (isDemo=true skips save),
+    // but user is in referrals (they used the code) and in gamePlays (they started playing),
+    // then trust the frontend that they completed the level and allow increment
+    if (!allRequiredLevelsCompleted && freeTrial.isDemo === true) {
+      console.log(`⚠️ GameProgress not found/complete for demo user - checking alternative validation...`);
+      
+      // Check if user is in referrals (meaning they used the code)
+      const userInReferrals = freeTrial.referrals?.some(
+        (ref) => ref.referredUserId && ref.referredUserId.toString() === req.userId.toString()
+      );
+      
+      // Check if user is in gamePlays (meaning they started playing)
+      const userInGamePlays = freeTrial.gamePlays?.some(
+        (play) => play.userId && play.userId.toString() === req.userId.toString()
+      );
+      
+      console.log(`🔍 Alternative validation: userInReferrals=${userInReferrals}, userInGamePlays=${userInGamePlays}`);
+      
+      // If user used the code and started playing, trust frontend that they completed the level
+      if (userInReferrals && userInGamePlays) {
+        console.log(`✅ Demo user validation passed: User used code and started playing - trusting frontend that level is complete`);
+        allRequiredLevelsCompleted = true;
+      }
     }
     
     // CRITICAL: If user has completed required levels, check if seat was already incremented
@@ -808,6 +849,7 @@ router.post('/increment-seat-on-completion', authenticateToken, async (req, res)
     // If required levels are not completed yet, return error
     if (!allRequiredLevelsCompleted) {
       const requiredLevels = targetAudience === 'B2C' ? 'Level 1' : 'all 3 levels (Level 1, 2, and 3)';
+      console.log(`❌ Required levels not completed. L1=${level1Complete}, L2=${level2Complete}, L3=${level3Complete}, allRequired=${allRequiredLevelsCompleted}`);
       return res.status(400).json({ 
         error: `You must complete ${requiredLevels} before your seat can be counted.`,
         levelsNotCompleted: true,
@@ -842,7 +884,15 @@ router.post('/increment-seat-on-completion', authenticateToken, async (req, res)
     // completed flag is set to true ONLY when seat is incremented
     // So: completed = true → "Play Again" (seat already used) → Don't increment
     //     completed = false/undefined → First time completion (seat not used yet) → Increment
+    // IMPORTANT: For reference code users, gamePlays entry might not exist initially
+    // So we also check if user is in referrals (which means they used the code)
     const userGamePlayEntry = existingPlayIndex >= 0 ? freeTrial.gamePlays[existingPlayIndex] : null;
+    const userInReferrals = freeTrial.referrals?.some(
+      (ref) => ref.referredUserId && ref.referredUserId.toString() === req.userId.toString()
+    );
+    
+    // If user has completed required levels AND their seat was already incremented (completed = true)
+    // This is "Play Again" scenario - don't increment again
     if (allRequiredLevelsCompleted && userGamePlayEntry && userGamePlayEntry.completed === true) {
       console.log(`⚠️ User has completed required levels AND seat was already incremented - this is "Play Again" scenario`);
       console.log(`ℹ️ Skipping seat increment - user can play again but seat count will not change`);
@@ -851,6 +901,12 @@ router.post('/increment-seat-on-completion', authenticateToken, async (req, res)
         alreadyPlayed: true,
         seatsFinished: true
       });
+    }
+    
+    // IMPORTANT: If user is in referrals but not in gamePlays, they used reference code
+    // This is valid - they should be able to increment seat when they complete levels
+    if (userInReferrals && !userGamePlayEntry) {
+      console.log(`ℹ️ User used reference code (in referrals) but not in gamePlays yet - this is valid for seat increment`);
     }
     
     // Use atomic update to prevent race conditions and duplicate increments
@@ -863,6 +919,7 @@ router.post('/increment-seat-on-completion', authenticateToken, async (req, res)
         [`gamePlays.${existingPlayIndex}.completed`]: true,
         [`gamePlays.${existingPlayIndex}.completedAt`]: new Date()
       };
+      console.log(`📝 Updating existing gamePlays entry at index ${existingPlayIndex} for user ${req.userId}`);
     } else {
       updateQuery.$push = {
         gamePlays: {
@@ -872,6 +929,7 @@ router.post('/increment-seat-on-completion', authenticateToken, async (req, res)
           completedAt: new Date()
         }
       };
+      console.log(`📝 Adding new gamePlays entry for user ${req.userId} (reference code user)`);
     }
     
     // Check if all seats will be used after increment
@@ -881,40 +939,59 @@ router.post('/increment-seat-on-completion', authenticateToken, async (req, res)
       updateQuery.$set.status = 'completed';
     }
     
+    // Log current state before update
+    console.log(`🔍 Before increment - usedSeats: ${freeTrial.usedSeats}, maxSeats: ${maxSeats}`);
+    console.log(`🔍 gamePlays entries: ${freeTrial.gamePlays?.length || 0}`);
+    freeTrial.gamePlays?.forEach((play, idx) => {
+      console.log(`  [${idx}] userId: ${play.userId}, completed: ${play.completed || false}`);
+    });
+    
     // Use findOneAndUpdate with condition to prevent duplicate increment
     // Only update if user's gamePlays entry doesn't have completed = true
     // This allows first time completion (gamePlays exists but completed = false/undefined)
     // But prevents "Play Again" (gamePlays exists and completed = true)
-    const updatedFreeTrial = await FreeTrial.findOneAndUpdate(
-      {
-        _id: freeTrial._id,
-        $or: [
-          { gamePlays: { $exists: false } },
-          { gamePlays: { $size: 0 } },
-          {
-            gamePlays: {
-              $not: {
-                $elemMatch: {
-                  userId: req.userId,
-                  completed: true
-                }
+    // IMPORTANT: Also allow if user is in referrals but not in gamePlays (reference code user)
+    const updateCondition = {
+      _id: freeTrial._id,
+      $or: [
+        { gamePlays: { $exists: false } },
+        { gamePlays: { $size: 0 } },
+        {
+          gamePlays: {
+            $not: {
+              $elemMatch: {
+                userId: req.userId,
+                completed: true
               }
             }
           }
-        ]
-      },
+        }
+      ]
+    };
+    
+    console.log(`🔍 Update condition:`, JSON.stringify(updateCondition, null, 2));
+    
+    const updatedFreeTrial = await FreeTrial.findOneAndUpdate(
+      updateCondition,
       updateQuery,
       { new: true }
     );
     
     if (!updatedFreeTrial) {
       // Update was skipped because condition wasn't met (user already completed)
+      console.log(`⚠️ Update skipped - user ${req.userId} already has completed = true in gamePlays`);
+      console.log(`🔍 Current gamePlays state:`, freeTrial.gamePlays?.map(p => ({
+        userId: p.userId?.toString(),
+        completed: p.completed
+      })));
       return res.status(400).json({ 
         error: 'You have already completed the game with this code. Your seat has been used.',
         alreadyPlayed: true,
         seatsFinished: true
       });
     }
+    
+    console.log(`✅ Seat incremented successfully - usedSeats: ${updatedFreeTrial.usedSeats}, maxSeats: ${updatedFreeTrial.maxSeats}`);
     
     // Update freeTrial reference
     freeTrial = updatedFreeTrial;

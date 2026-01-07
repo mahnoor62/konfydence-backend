@@ -4,7 +4,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/rbac');
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
-// OrgUser model removed - using User table only for static data
+const OrgUser = require('../models/OrgUser');
 const Organization = require('../models/Organization');
 const School = require('../models/School');
 

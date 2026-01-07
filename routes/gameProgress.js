@@ -28,8 +28,20 @@ router.post('/', authenticateToken, async (req, res) => {
       correctAnswers,
       totalQuestions,
       percentageScore,
-      riskLevel
+      riskLevel,
+      isDemo
     } = req.body;
+
+    // CRITICAL: Skip saving progress if isDemo is true (demo cards clicked)
+    // Only save progress when isDemo is false (purchased/regular users)
+    if (isDemo === true) {
+      console.log(`⚠️ Demo user detected (isDemo=true) - skipping game progress save`);
+      return res.status(200).json({ 
+        message: 'Game progress skipped for demo user',
+        skipped: true,
+        isDemo: true
+      });
+    }
 
     console.log(`📊 Saving game progress - User: ${req.userId}, Level: ${levelNumber}, Product: ${productId}, Cards: ${cards?.length || 0}`);
     console.log(`📦 Request body:`, {
@@ -38,7 +50,8 @@ router.post('/', authenticateToken, async (req, res) => {
       cardsCount: cards?.length || 0,
       totalScore: totalScore,
       correctAnswers: correctAnswers,
-      totalQuestions: totalQuestions
+      totalQuestions: totalQuestions,
+      isDemo: isDemo
     });
 
     // Validation
@@ -134,18 +147,25 @@ router.post('/', authenticateToken, async (req, res) => {
         userId: req.userId
       });
       
+      console.log(`🔍 Checking progress before save - found ${allProgressBefore.length} progress records`);
+      allProgressBefore.forEach(p => {
+        console.log(`  - Level ${p.levelNumber}: completedAt=${p.completedAt ? 'Yes' : 'No'}, cards=${p.cards?.length || 0}, productId=${p.productId?.toString() || p.productId}`);
+      });
+      
       const level1CompleteBefore = allProgressBefore.some(p => 
         p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0
       );
       const level2CompleteBefore = allProgressBefore.some(p => 
         p.levelNumber === 2 && p.completedAt && p.cards && p.cards.length > 0
       );
+      // For level 3, check if there's already a completed level 3 progress
+      // Note: This check happens BEFORE we save the new progress, so we're checking old progress
       const level3CompleteBefore = allProgressBefore.some(p => 
         p.levelNumber === 3 && p.completedAt && p.cards && p.cards.length > 0
       );
       
       wasAlreadyCompletedBefore = level1CompleteBefore && level2CompleteBefore && level3CompleteBefore;
-      console.log(`🔍 Check before save: wasAlreadyCompletedBefore = ${wasAlreadyCompletedBefore}`);
+      console.log(`🔍 Check before save: L1=${level1CompleteBefore}, L2=${level2CompleteBefore}, L3=${level3CompleteBefore}, wasAlreadyCompletedBefore=${wasAlreadyCompletedBefore}`);
     }
 
     // Find or create progress document for this user and level (one document per user per level)
@@ -260,25 +280,82 @@ router.post('/', authenticateToken, async (req, res) => {
     // So we skip seat increment here for demo users to prevent duplicate increments
     if (levelNumber === 3) {
       try {
-        // Check if this is a demo user by checking if there's a free trial with targetAudience
+        // CRITICAL: Check if user is a purchased user (has paid transaction) or demo user
+        // Priority: If user has a PAID transaction for this productId, they are a PURCHASED user
         const FreeTrial = require('../models/FreeTrial');
         const Transaction = require('../models/Transaction');
+        const mongoose = require('mongoose');
         
-        // Check if user has a demo free trial
-        const demoFreeTrial = await FreeTrial.findOne({
-          'gamePlays.userId': req.userId,
-          targetAudience: { $exists: true, $ne: null },
-          isDemo: true
-        });
+        // First check: Does user have a PAID transaction for this productId? (PURCHASED USER)
+        const progressProductId = productId?.toString();
+        let isPurchasedUser = false;
+        let purchasedTransaction = null;
+        
+        if (mongoose.Types.ObjectId.isValid(progressProductId)) {
+          try {
+            const productObjectId = new mongoose.Types.ObjectId(progressProductId);
+            const userObjectId = new mongoose.Types.ObjectId(req.userId);
+            
+            console.log(`🔍 Searching for purchased transaction - userId: ${userObjectId}, productId: ${productObjectId}`);
+            
+            purchasedTransaction = await Transaction.findOne({
+              userId: userObjectId,
+              productId: productObjectId,
+              status: 'paid'
+            });
+            
+            if (purchasedTransaction) {
+              isPurchasedUser = true;
+              console.log(`✅ Purchased user detected - Transaction ID: ${purchasedTransaction._id}`);
+              console.log(`📊 Transaction details: usedSeats=${purchasedTransaction.usedSeats || 0}, maxSeats=${purchasedTransaction.maxSeats || 0}`);
+            } else {
+              console.log(`⚠️ No purchased transaction found for userId: ${userObjectId}, productId: ${productObjectId}`);
+            }
+          } catch (err) {
+            console.error(`❌ Error checking for purchased transaction: ${err.message}`);
+            console.error(`❌ Error stack: ${err.stack}`);
+          }
+        } else {
+          console.log(`⚠️ Invalid productId for ObjectId conversion: ${progressProductId}`);
+        }
+        
+        // Only check for demo free trial if user is NOT a purchased user
+        let isDemoUser = false;
+        if (!isPurchasedUser) {
+          // Check for demo free trial by gamePlays OR referrals (for reference code users)
+          // Reference code users might not have gamePlays entry initially, but they'll be in referrals
+          const demoFreeTrial = await FreeTrial.findOne({
+            $or: [
+              { 'gamePlays.userId': req.userId },
+              { 'referrals.referredUserId': req.userId }
+            ],
+            targetAudience: { $exists: true, $ne: null },
+            isDemo: true
+          });
+          
+          if (demoFreeTrial) {
+            isDemoUser = true;
+            console.log(`🎮 Demo user detected (via gamePlays or referrals) - skipping seat increment in gameProgress (will be handled by increment-seat-on-completion endpoint)`);
+          }
+        }
         
         // If this is a demo user, skip seat increment here (it will be handled by increment-seat-on-completion endpoint)
-        if (demoFreeTrial) {
+        if (isDemoUser) {
           console.log(`🎮 Demo user detected - skipping seat increment in gameProgress (will be handled by increment-seat-on-completion endpoint)`);
         } else {
+          // For purchased users OR organization members, proceed with seat increment logic
+          // Organization members use organization's transaction, so we need to check for that too
+          // For purchased users, proceed with seat increment logic
           // For non-demo users, proceed with seat increment logic
           // Check if user has completed all 3 levels NOW (after this save)
+          // IMPORTANT: Query must include the progress we just saved
           const allProgress = await GameProgress.find({ 
             userId: req.userId
+          });
+          
+          console.log(`📊 Total progress records found: ${allProgress.length}`);
+          allProgress.forEach(p => {
+            console.log(`  - Level ${p.levelNumber}: completedAt=${p.completedAt ? 'Yes' : 'No'}, cards=${p.cards?.length || 0}, productId=${p.productId?.toString() || p.productId}`);
           });
           
           const level1Complete = allProgress.some(p => p.levelNumber === 1 && p.completedAt && p.cards && p.cards.length > 0);
@@ -287,32 +364,123 @@ router.post('/', authenticateToken, async (req, res) => {
           
           const allLevelsCompleted = level1Complete && level2Complete && level3Complete;
           
+          console.log(`🔍 Level completion status: L1=${level1Complete}, L2=${level2Complete}, L3=${level3Complete}, All=${allLevelsCompleted}`);
+          
           // Use the wasAlreadyCompletedBefore check we did BEFORE saving progress
           // This ensures we only increment once when user first completes all 3 levels
+          // However, if wasAlreadyCompletedBefore is true but usedSeats is still 0, 
+          // we should still increment (edge case: progress exists but seat wasn't incremented before)
           const isFirstTimeCompletion = allLevelsCompleted && !wasAlreadyCompletedBefore;
           
           console.log(`🔍 Seat increment check: allLevelsCompleted=${allLevelsCompleted}, wasAlreadyCompletedBefore=${wasAlreadyCompletedBefore}, isFirstTimeCompletion=${isFirstTimeCompletion}`);
           
-          if (isFirstTimeCompletion) {
-            console.log(`🎉 User ${req.userId} has completed all 3 levels for the first time - incrementing seat count`);
+          // Use the transaction we already found for purchased users
+          // This avoids duplicate queries
+          let transaction = purchasedTransaction;
+          const progressProductId = productId?.toString();
+          
+          // If transaction not found by direct userId, try fallback search (for organization members)
+          if (!transaction) {
+            console.log(`⚠️ Transaction not found by direct userId match, trying fallback search for organization members...`);
+            
+            // First, check if user is organization member and get organization transaction
+            const User = require('../models/User');
+            const Organization = require('../models/Organization');
+            const currentUser = await User.findById(req.userId);
+            
+            if (currentUser && currentUser.organizationId) {
+              console.log(`🔍 User is organization member (orgId: ${currentUser.organizationId}), checking organization transactions...`);
+              
+              const productObjectId = new mongoose.Types.ObjectId(progressProductId);
+              const orgTransactions = await Transaction.find({
+                organizationId: currentUser.organizationId,
+                productId: productObjectId,
+                status: 'paid',
+                type: 'b2b_contract'
+              })
+              .populate('productId')
+              .sort({ createdAt: -1 });
+              
+              console.log(`📋 Found ${orgTransactions.length} organization transactions for productId ${progressProductId}`);
+              
+              // Check if user is in organization.members array
+              const organization = await Organization.findById(currentUser.organizationId);
+              if (organization && organization.members) {
+                const memberIds = organization.members.map(m => m.toString());
+                const isMember = memberIds.includes(req.userId.toString());
+                
+                console.log(`🔍 Organization members: ${memberIds.join(', ')}, Current user: ${req.userId}, Is member: ${isMember}`);
+                
+                if (isMember && orgTransactions.length > 0) {
+                  transaction = orgTransactions[0];
+                  console.log(`✅ Found organization transaction for member: ${transaction._id}`);
+                  console.log(`📊 Transaction details: usedSeats=${transaction.usedSeats}, maxSeats=${transaction.maxSeats}`);
+                } else if (!isMember) {
+                  console.log(`⚠️ User is not in organization.members array`);
+                }
+              } else {
+                console.log(`⚠️ Organization not found or has no members array`);
+              }
+            }
+            
+            // If still not found, try finding by gamePlays (fallback)
+            if (!transaction) {
+              console.log(`🔍 Trying gamePlays search as fallback...`);
+              const transactionsByGamePlays = await Transaction.find({
+                'gamePlays.userId': req.userId,
+                status: 'paid'
+              })
+              .populate('productId')
+              .sort({ createdAt: -1 });
+              
+              console.log(`📋 Found ${transactionsByGamePlays.length} transactions with gamePlays for user ${req.userId}`);
+              
+              // Find matching transaction by productId
+              for (const tx of transactionsByGamePlays) {
+                const txProductId = tx.productId?._id?.toString() || tx.productId?.toString() || tx.productId;
+                const txProductIdStr = txProductId?.toString();
+                
+                console.log(`🔍 Comparing: txProductId=${txProductIdStr}, progressProductId=${progressProductId}`);
+                
+                if (txProductIdStr === progressProductId) {
+                  transaction = tx;
+                  console.log(`✅ Found transaction by gamePlays + productId: ${transaction._id}`);
+                  break;
+                }
+              }
+            }
+          }
+          
+          // Also check if transaction exists and usedSeats is 0 (edge case: progress complete but seat not incremented)
+          const shouldIncrementSeat = isFirstTimeCompletion || (allLevelsCompleted && transaction && (transaction.usedSeats || 0) === 0);
+          
+          if (shouldIncrementSeat && transaction) {
+            if (!isFirstTimeCompletion && allLevelsCompleted) {
+              console.log(`⚠️ Edge case detected: wasAlreadyCompletedBefore=true but usedSeats=0, proceeding with increment`);
+            }
+            console.log(`🎉 User ${req.userId} has completed all 3 levels - incrementing seat count`);
             console.log(`🔍 Debug: wasAlreadyCompletedBefore = ${wasAlreadyCompletedBefore}, allLevelsCompleted = ${allLevelsCompleted}`);
             
-            // Find transaction or free trial where this user is in gamePlays
-            // Try to find transaction first
-            const transactions = await Transaction.find({
-              'gamePlays.userId': req.userId,
-              status: 'paid'
-            }).sort({ createdAt: -1 });
+            if (transaction) {
+              console.log(`✅ Using transaction: ${transaction._id}`);
+              console.log(`📊 Transaction details: usedSeats=${transaction.usedSeats}, maxSeats=${transaction.maxSeats}, type=${transaction.type || 'N/A'}`);
+            } else {
+              console.log(`❌ Transaction still not found after all fallback searches`);
+            }
             
-            // Find matching transaction by productId (prefer most recent)
-            let transaction = null;
-            for (const tx of transactions) {
-              const txProductId = tx.productId?._id?.toString() || tx.productId?.toString();
-              const progressProductId = productId?.toString();
-              if (txProductId === progressProductId) {
-                transaction = tx;
-                break;
-              }
+            if (!transaction) {
+              console.log(`❌ No transaction found for user ${req.userId} with productId ${progressProductId}`);
+              console.log(`🔍 Debug: Checking all user transactions...`);
+              const allUserTransactions = await Transaction.find({ userId: req.userId, status: 'paid' })
+                .populate('productId', '_id name')
+                .select('_id productId status usedSeats maxSeats');
+              console.log(`📋 All user transactions:`, allUserTransactions.map(tx => ({
+                id: tx._id,
+                productId: tx.productId?._id?.toString() || tx.productId?.toString(),
+                productName: tx.productId?.name,
+                usedSeats: tx.usedSeats,
+                maxSeats: tx.maxSeats
+              })));
             }
             
             // If no transaction found, try free trial
@@ -344,7 +512,18 @@ router.post('/', authenticateToken, async (req, res) => {
           
               // Increment seat for transaction if found (non-demo users only)
               if (transaction) {
+                console.log(`🔍 Transaction found - ID: ${transaction._id}, current usedSeats: ${transaction.usedSeats || 0}, maxSeats: ${transaction.maxSeats || 0}`);
+                console.log(`🔍 Transaction details: userId=${transaction.userId}, productId=${transaction.productId}, status=${transaction.status}`);
+                
+                // CRITICAL: For first time completion, always increment usedSeats
+                // wasAlreadyCompletedBefore check ensures we don't increment twice for "Play Again"
+                const currentUsedSeats = transaction.usedSeats || 0;
+                const maxSeats = transaction.maxSeats || 0;
+                
+                console.log(`🔍 Pre-increment check: currentUsedSeats=${currentUsedSeats}, maxSeats=${maxSeats}, wasAlreadyCompletedBefore=${wasAlreadyCompletedBefore}`);
+                
                 // Use atomic increment to prevent race conditions
+                // This will increment even if usedSeats >= maxSeats (we track actual usage, not limit)
                 const oldUsedSeats = transaction.usedSeats || 0;
                 const updatedTransaction = await Transaction.findByIdAndUpdate(
                   transaction._id,
@@ -352,7 +531,12 @@ router.post('/', authenticateToken, async (req, res) => {
                   { new: true } // Return updated document
                 );
                 
-                console.log(`✅ Incremented usedSeats for transaction ${transaction._id}: ${oldUsedSeats} -> ${updatedTransaction.usedSeats}`);
+                if (updatedTransaction) {
+                  console.log(`✅ Successfully incremented usedSeats for transaction ${transaction._id}: ${oldUsedSeats} -> ${updatedTransaction.usedSeats}`);
+                } else {
+                  console.error(`❌ Failed to increment usedSeats - Transaction.findByIdAndUpdate returned null`);
+                  console.error(`❌ Transaction._id: ${transaction._id}`);
+                }
                 
                 // Update transaction reference for organization/school updates
                 transaction = updatedTransaction;
