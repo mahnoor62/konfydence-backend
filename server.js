@@ -6,11 +6,9 @@ const path = require('path');
 const authRoutes = require('./routes/auth');
 const productRoutes = require('./routes/products');
 const blogRoutes = require('./routes/blog');
-const testimonialRoutes = require('./routes/testimonials');
 const partnerRoutes = require('./routes/partners');
 const leadRoutes = require('./routes/leads');
 const contactRoutes = require('./routes/contact');
-const settingsRoutes = require('./routes/settings');
 const uploadRoutes = require('./routes/uploads');
 
 dotenv.config();
@@ -91,14 +89,12 @@ app.use('/api/badges', require('./routes/badges'));
 app.use('/api/blog', blogRoutes);
 app.use('/api/blog-categories', require('./routes/blogCategories'));
 app.use('/api/blog-tags', require('./routes/blogTags'));
-app.use('/api/testimonials', testimonialRoutes);
 app.use('/api/partners', partnerRoutes);
 app.use('/api/leads', leadRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/subscribers', require('./routes/subscribers'));
 // Keep backward compatibility
 app.use('/api/newsletter', require('./routes/subscribers'));
-app.use('/api/settings', settingsRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/game-progress', require('./routes/gameProgress'));
 

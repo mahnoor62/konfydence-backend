@@ -3,7 +3,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/rbac');
 const Organization = require('../models/Organization');
-const OrgUser = require('../models/OrgUser');
+// OrgUser model removed - using User table only for static data
 const CustomPackage = require('../models/CustomPackage');
 
 const router = express.Router();
@@ -134,7 +134,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
           name: organization.name,
           uniqueCode: organization.uniqueCode
         },
-        orgUsers: [] // Don't show other members to members
+        orgUsers: [] // Don't show other members to members (OrgUser model removed, using User table only)
       });
     }
 
@@ -234,7 +234,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
     res.json({
       organization,
-      orgUsers: allOrgUsers
+      orgUsers: formattedMembers
     });
   } catch (error) {
     console.error('Error fetching organization:', error);

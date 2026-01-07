@@ -4,7 +4,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/rbac');
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
-const OrgUser = require('../models/OrgUser');
+// OrgUser model removed - using User table only for static data
 const Organization = require('../models/Organization');
 const School = require('../models/School');
 
@@ -173,40 +173,12 @@ router.get('/', authenticateToken, checkPermission('users'), async (req, res) =>
         ];
       }
 
-      // Get users with role
+      // Get users with role (OrgUser model removed, using User table only)
       const usersWithRole = await User.find(userQuery)
         .populate('memberships.packageId', 'name')
         .sort({ createdAt: -1 });
 
-      // Get users from OrgUser
-      const orgUsers = await OrgUser.find({ segment })
-        .populate('userId', 'name email lastLogin')
-        .populate('organizationId', 'name segment')
-        .sort({ createdAt: -1 });
-
-      // Combine and format
-      const formattedOrgUsers = orgUsers.map(orgUser => ({
-        _id: orgUser.userId._id,
-        name: orgUser.userId.name,
-        email: orgUser.userId.email,
-        role: segment === 'B2B' ? 'b2b_user' : 'b2e_user',
-        lastLogin: orgUser.userId.lastLogin,
-        organizationId: orgUser.organizationId,
-        organizationName: orgUser.organizationId?.name,
-        segment: orgUser.segment,
-        memberships: [], // OrgUsers have custom packages, not regular memberships
-        createdAt: orgUser.createdAt
-      }));
-
-      // Combine both arrays
-      const allUsers = [...usersWithRole, ...formattedOrgUsers];
-      
-      // Remove duplicates based on _id
-      const uniqueUsers = allUsers.filter((user, index, self) =>
-        index === self.findIndex(u => u._id.toString() === user._id.toString())
-      );
-
-      res.json(uniqueUsers);
+      res.json(usersWithRole);
     } else {
       // Default to B2C if no segment specified
       const query = { role: 'b2c_user' };

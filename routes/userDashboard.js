@@ -5,7 +5,7 @@ const Transaction = require('../models/Transaction');
 const Package = require('../models/Package');
 const Organization = require('../models/Organization');
 const Card = require('../models/Card');
-const OrgUser = require('../models/OrgUser');
+// OrgUser model removed - using User table only for static data
 const CustomPackage = require('../models/CustomPackage');
 const GameProgress = require('../models/GameProgress');
 
@@ -658,11 +658,13 @@ router.get('/organizations', authenticateToken, async (req, res) => {
         .limit(1); // Only get the first one if multiple found
     }
 
-    // Get organization details with stats
+    // Get organization details with stats (OrgUser model removed, using User table only)
     const orgsWithStats = await Promise.all(
       organizations.map(async (org) => {
-        const orgUsersCount = await OrgUser.countDocuments({
+        const userCount = await User.countDocuments({
           organizationId: org._id,
+          role: { $in: ['b2b_member', 'b2e_member'] },
+          memberStatus: 'approved'
         });
 
         const activeContracts = await CustomPackage.countDocuments({
@@ -672,7 +674,7 @@ router.get('/organizations', authenticateToken, async (req, res) => {
 
         return {
           ...org.toObject(),
-          userCount: orgUsersCount,
+          userCount: userCount,
           activeContractsCount: activeContracts,
         };
       })
@@ -827,18 +829,25 @@ router.get('/organizations/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied. You can only access your own organization.' });
     }
 
-    // Get organization users
-    const orgUsers = await OrgUser.find({ organizationId: req.params.id })
-      .populate('userId', 'name email')
-      .populate('assignedCustomPackageIds');
+    // Get organization users (OrgUser model removed, using User table only)
+    const orgUsers = await User.find({ 
+      organizationId: req.params.id,
+      role: { $in: ['b2b_member', 'b2e_member'] },
+      memberStatus: 'approved'
+    }).select('name email isActive');
 
     // Get progress stats
     const totalUsers = orgUsers.length;
-    const activeUsers = orgUsers.filter((ou) => ou.isActive).length;
+    const activeUsers = orgUsers.filter((user) => user.isActive).length;
 
     res.json({
       organization,
-      orgUsers,
+      orgUsers: orgUsers.map(user => ({
+        userId: user,
+        organizationId: req.params.id,
+        assignedCustomPackageIds: [],
+        isActive: user.isActive
+      })),
       stats: {
         totalUsers,
         activeUsers,

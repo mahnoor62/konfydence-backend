@@ -205,63 +205,26 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
     // Import Transaction model
     const Transaction = require('../models/Transaction');
-    const OrgUser = require('../models/OrgUser');
     
-    // First, get all users who have joined this school
+    // Get all users who have joined this school
     const allJoinedMembers = await User.find({ 
       schoolId: req.params.id,
       role: { $in: ['b2b_member', 'b2e_member'] },
       memberStatus: 'approved' // Only approved members
     }).select('name email memberStatus isActive createdAt memberApprovedAt role _id');
 
-    // Fetch OrgUser records for approved members (schools also use OrgUser model)
-    const memberIds = allJoinedMembers.map(m => m._id);
-    const orgUsers = await OrgUser.find({ 
-      organizationId: school._id, // Schools might be linked via organizationId
-      ...(memberIds.length > 0 ? { userId: { $in: memberIds } } : {})
-    })
-      .populate('userId', 'name email memberStatus isActive createdAt memberApprovedAt role')
-      .populate('assignedCustomPackageIds');
-
-    // Combine OrgUser data with member data
-    const memberMap = new Map();
-    
-    // Add members from OrgUser
-    orgUsers.forEach(orgUser => {
-      if (orgUser.userId) {
-        const userId = orgUser.userId._id.toString();
-        memberMap.set(userId, {
-          _id: orgUser._id,
-          userId: orgUser.userId,
-          organizationId: orgUser.organizationId,
-          assignedCustomPackageIds: orgUser.assignedCustomPackageIds,
-          createdAt: orgUser.createdAt,
-          updatedAt: orgUser.updatedAt
-        });
-      }
-    });
-
-    // Add members from User table who are not in OrgUser record
-    allJoinedMembers.forEach(user => {
-      const userId = user._id.toString();
-      if (!memberMap.has(userId)) {
-        // Create a virtual OrgUser-like structure
-        memberMap.set(userId, {
-          userId: user,
-          organizationId: school._id,
-          assignedCustomPackageIds: [],
-          createdAt: user.createdAt || new Date(),
-          updatedAt: user.updatedAt || new Date()
-        });
-      }
-    });
-
-    // Convert map to array
-    const allSchoolUsers = Array.from(memberMap.values());
+    // Format members data (OrgUser model removed, using User table only)
+    const formattedMembers = allJoinedMembers.map(user => ({
+      userId: user,
+      organizationId: school._id,
+      assignedCustomPackageIds: [],
+      createdAt: user.createdAt || new Date(),
+      updatedAt: user.updatedAt || new Date()
+    }));
 
     res.json({
       ...school.toObject(),
-      schoolUsers: allSchoolUsers
+      schoolUsers: formattedMembers
     });
   } catch (error) {
     console.error('Error fetching school:', error);
