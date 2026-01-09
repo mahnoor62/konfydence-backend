@@ -355,6 +355,8 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
     let billingType = 'one_time';
     let currency = 'USD';
     let seatLimit = 5;
+    let isShopPagePurchase = false; // Flag to identify shop page purchases
+    let requestedPackageType = 'physical'; // Package type for shop page purchases
 
     // Handle custom package purchase
     if (customPackageId) {
@@ -401,10 +403,15 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       currency = pricing.currency || 'USD';
       seatLimit = customPackage.seatLimit || 5;
     } else if (directProductPurchase && productId) {
-      // Handle direct product purchase (for physical products)
+      // Handle direct product purchase (for shop page products)
       if (!product) {
         return res.status(404).json({ error: 'Product not found' });
       }
+      
+      // Check if this is a shop page purchase
+      isShopPagePurchase = req.body.shopPagePurchase === true;
+      requestedPackageType = req.body.packageType || 'physical';
+      const requestedMaxSeats = req.body.maxSeats !== undefined ? parseInt(req.body.maxSeats) : null;
       
       // Use product price directly
       pricing = {
@@ -412,19 +419,38 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
         currency: 'USD', // Always USD for direct product purchases
         billingType: 'one_time'
       };
-      packageName = product.title || product.name || 'Physical Product';
+      packageName = product.title || product.name || 'Product';
       // Stripe requires non-empty description, so use product description or default text
-      packageDescription = product.description || product.title || product.name || 'Physical product purchase';
+      packageDescription = product.description || product.title || product.name || 'Product purchase';
       // Remove HTML tags if present
       if (packageDescription) {
         packageDescription = packageDescription.replace(/<[^>]*>/g, '').trim();
       }
       if (!packageDescription) {
-        packageDescription = 'Physical product purchase';
+        packageDescription = 'Product purchase';
       }
       billingType = 'one_time';
       currency = 'USD';
-      seatLimit = 1; // Default 1 seat for B2C direct purchases
+      
+      // Set seat limit based on package type
+      // If packageType is provided (from Products page or shop page), use it
+      if (requestedPackageType) {
+        if (requestedPackageType === 'physical') {
+          seatLimit = requestedMaxSeats !== null ? requestedMaxSeats : 0;
+        } else if (requestedPackageType === 'digital' || requestedPackageType === 'digital_physical') {
+          seatLimit = requestedMaxSeats !== null ? requestedMaxSeats : 1;
+        } else {
+          seatLimit = 1; // Default 1 seat
+        }
+      } else if (isShopPagePurchase && requestedMaxSeats !== null) {
+        seatLimit = requestedMaxSeats;
+      } else if (isShopPagePurchase && requestedPackageType === 'physical') {
+        seatLimit = 0; // Physical products have 0 seats
+      } else if (isShopPagePurchase && (requestedPackageType === 'digital' || requestedPackageType === 'digital_physical')) {
+        seatLimit = 1; // Digital and bundle products have 1 seat
+      } else {
+        seatLimit = 1; // Default 1 seat for direct purchases
+      }
     } else {
       // Handle regular package purchase
       package = await Package.findById(packageId);
@@ -474,11 +500,52 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
     }
 
     // Generate unique code for this payment (will be used when transaction is created in webhook)
-    let uniqueCode = generateUniqueCode();
-    let codeExists = await Transaction.findOne({ uniqueCode });
-    while (codeExists) {
+    // For physical products (shop page or products page), don't generate unique code (no digital access)
+    // For digital/digital_physical products (shop page, products page, or regular packages), generate unique code (digital play needed)
+    let uniqueCode = null;
+    
+    // Check if this is a direct product purchase (shop page or products page)
+    const isDirectProductPurchase = directProductPurchase === true;
+    // Get packageType from request body (for products page purchases), from shopPagePurchase logic, or from package
+    let packageTypeFromRequest = req.body.packageType || requestedPackageType || null;
+    
+    // For regular package purchases, get packageType from package model (package is already loaded above)
+    if (!isDirectProductPurchase && package) {
+      packageTypeFromRequest = package.packageType || package.type || package.category;
+      console.log('📦 Package purchase - packageType determined:', {
+        packageId: package._id,
+        packageName: package.name,
+        packageTypeFromPackage: package.packageType,
+        packageTypeFromType: package.type,
+        packageTypeFromCategory: package.category,
+        finalPackageType: packageTypeFromRequest
+      });
+    }
+    
+    // Generate unique code for digital/digital_physical packages/products
+    // Skip only for physical products
+    if (packageTypeFromRequest && (packageTypeFromRequest === 'digital' || packageTypeFromRequest === 'digital_physical')) {
       uniqueCode = generateUniqueCode();
-      codeExists = await Transaction.findOne({ uniqueCode });
+      let codeExists = await Transaction.findOne({ uniqueCode });
+      while (codeExists) {
+        uniqueCode = generateUniqueCode();
+        codeExists = await Transaction.findOne({ uniqueCode });
+      }
+      console.log('✅ Generated unique code for checkout session:', {
+        isDirectProductPurchase,
+        packageTypeFromRequest,
+        uniqueCode,
+        packageId: package?._id,
+        packageName: package?.name
+      });
+    } else {
+      console.log('⚠️ Skipping unique code generation:', {
+        isDirectProductPurchase,
+        packageTypeFromRequest,
+        packageId: package?._id,
+        packageName: package?.name,
+        reason: packageTypeFromRequest === 'physical' ? 'physical product/package' : 'packageType is not digital/digital_physical or is null/undefined'
+      });
     }
 
     // Get frontend URL from environment or use default
@@ -512,15 +579,35 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       userId: req.userId.toString(),
       productId: productId ? productId.toString() : '',
       packageName: packageName,
-      uniqueCode: uniqueCode,
+      uniqueCode: uniqueCode || '',
       billingType: billingType || 'one_time',
       directProductPurchase: directProductPurchase ? 'true' : 'false',
       seatLimit: seatLimit.toString(),
       urlType: urlType || '', // Store urlType for transaction type determination
     };
     
+    // Add shop page purchase flag and package type to metadata if provided
+    if (isShopPagePurchase) {
+      metadata.shopPagePurchase = 'true';
+      metadata.packageType = requestedPackageType;
+      metadata.maxSeats = seatLimit.toString();
+    }
+    
+    // Add package type and max seats for Products page purchases (not shop page)
+    // This ensures unique code generation and transaction creation work correctly for Products page
+    if (directProductPurchase && !isShopPagePurchase && requestedPackageType) {
+      metadata.packageType = requestedPackageType;
+      metadata.maxSeats = seatLimit.toString();
+    }
+    
+    // Also store referrer URL if available from request headers (for shop page detection)
+    const referrerUrl = req.headers.referer || req.headers.referrer || null;
+    if (referrerUrl) {
+      metadata.referrerUrl = referrerUrl;
+    }
+    
     // Only add packageId to metadata if it exists AND it's not a direct product purchase
-    // For physical product purchases, packageId should NOT be sent
+    // For direct product purchases, packageId should NOT be sent
     if (packageId && !directProductPurchase) {
       metadata.packageId = packageId.toString();
     }
@@ -641,7 +728,7 @@ router.post('/webhook', async (req, res) => {
         const packageId = session.metadata.packageId || null;
         const customPackageId = session.metadata.customPackageId || null;
         let productId = session.metadata.productId || null; // Use let instead of const to allow updating
-        const uniqueCode = session.metadata.uniqueCode;
+        let uniqueCode = session.metadata.uniqueCode || null;
         const billingType = session.metadata.billingType || 'one_time';
         const directProductPurchase = session.metadata.directProductPurchase === 'true';
         const seatLimit = directProductPurchase ? 1 : (parseInt(session.metadata.seatLimit) || 5); // Default 1 for direct product purchase
@@ -797,10 +884,57 @@ router.post('/webhook', async (req, res) => {
             }
           }
           
-          packageType = 'physical'; // Set to 'physical' for tactical card purchases
-          maxSeats = 0; // Physical products have 0 seats (no digital access)
+          // Check if this is a shop page purchase or Products page purchase
+          const isShopPagePurchase = session.metadata.shopPagePurchase === 'true';
+          const directProductPurchase = session.metadata.directProductPurchase === 'true';
+          const metadataPackageType = session.metadata.packageType || null;
           
-          // For physical products, typically no expiry or 1 year
+          // Handle both shop page and Products page direct product purchases
+          if ((isShopPagePurchase || (directProductPurchase && metadataPackageType))) {
+            // Shop page or Products page purchase - use packageType and maxSeats from metadata
+            packageType = metadataPackageType || 'physical';
+            const metadataMaxSeats = session.metadata.maxSeats;
+            if (metadataMaxSeats !== undefined && metadataMaxSeats !== null && metadataMaxSeats !== '') {
+              maxSeats = parseInt(metadataMaxSeats);
+            } else {
+              // Default based on packageType
+              if (packageType === 'physical') {
+                maxSeats = 0;
+              } else {
+                maxSeats = 1;
+              }
+            }
+            
+            // Generate unique code for digital and bundle products (not for physical)
+            if (packageType === 'digital' || packageType === 'digital_physical') {
+              if (!uniqueCode || uniqueCode === '') {
+                uniqueCode = generateUniqueCode();
+                let codeExists = await Transaction.findOne({ uniqueCode });
+                while (codeExists) {
+                  uniqueCode = generateUniqueCode();
+                  codeExists = await Transaction.findOne({ uniqueCode });
+                }
+              }
+            } else {
+              uniqueCode = undefined; // No unique code for physical products
+            }
+            
+            console.log(`✅ ${isShopPagePurchase ? 'Shop page' : 'Products page'} purchase:`, {
+              productId: product._id,
+              productName: product.title || product.name,
+              price: product.price,
+              packageType: packageType,
+              maxSeats: maxSeats,
+              hasUniqueCode: !!uniqueCode
+            });
+          } else {
+            // Regular direct product purchase (not from shop page)
+            packageType = 'physical'; // Set to 'physical' for tactical card purchases
+            maxSeats = 0; // Physical products have 0 seats (no digital access)
+            uniqueCode = undefined; // No unique code for physical products
+          }
+          
+          // For all direct product purchases, typically 1 year expiry
           const expiryDate = new Date(purchaseDate);
           expiryDate.setFullYear(expiryDate.getFullYear() + 1); // 1 year from purchase
           contractEndDate = setEndOfDay(expiryDate);
@@ -813,7 +947,8 @@ router.post('/webhook', async (req, res) => {
             userRole: user.role,
             transactionType: transactionType,
             packageType: packageType,
-            maxSeats: maxSeats
+            maxSeats: maxSeats,
+            isShopPagePurchase: isShopPagePurchase
           });
         } else if (packageId) {
           // Handle regular package purchase
@@ -843,12 +978,143 @@ router.post('/webhook', async (req, res) => {
             // Fallback to product/package targetAudience if role doesn't match
             transactionType = getTransactionType(package, product);
           }
-          packageType = package.packageType || package.type || 'standard';
+          packageType = package.packageType || package.type || package.category || 'standard';
+          
+          // CRITICAL FIX: If productId is present, check product to determine packageType for digital/digital_physical
+          // This handles Products page purchases where package might have 'standard' type but product is digital
+          if (productId && product) {
+            const productTitle = (product.title || product.name || '').toLowerCase();
+            const isDigitalProduct = productTitle.includes('digital') || productTitle.includes('extension');
+            const isBundleProduct = productTitle.includes('bundle') || productTitle.includes('full') || productTitle.includes('best value');
+            const isPhysicalProduct = productTitle.includes('physical') || productTitle.includes('tactical');
+            
+            // Override packageType based on product if package type is 'standard' or doesn't indicate digital
+            if (packageType === 'standard' || (!packageType || packageType === null)) {
+              if (isDigitalProduct) {
+                packageType = 'digital';
+                console.log('🔧 Override packageType to "digital" based on product:', {
+                  productId: product._id,
+                  productTitle: product.title || product.name,
+                  originalPackageType: package.packageType || package.type,
+                  newPackageType: packageType
+                });
+              } else if (isBundleProduct) {
+                packageType = 'digital_physical';
+                console.log('🔧 Override packageType to "digital_physical" based on product:', {
+                  productId: product._id,
+                  productTitle: product.title || product.name,
+                  originalPackageType: package.packageType || package.type,
+                  newPackageType: packageType
+                });
+              } else if (isPhysicalProduct) {
+                packageType = 'physical';
+              }
+            }
+          }
+          
+          console.log('📦 Final packageType determined for webhook:', {
+            packageId: package._id,
+            packageName: package.name,
+            packageTypeFromPackage: package.packageType,
+            packageTypeFromType: package.type,
+            packageTypeFromCategory: package.category,
+            productId: productId,
+            productName: product?.title || product?.name,
+            finalPackageType: packageType
+          });
+          
           // For B2C packages, default maxSeats to 1
           if (package.targetAudiences && package.targetAudiences.includes('B2C')) {
             maxSeats = package.maxSeats || 1;
           } else {
             maxSeats = package.maxSeats || seatLimit;
+          }
+          
+          // Generate unique code for digital/digital_physical packages if not already in metadata
+          // This handles Products page purchases that go through packages page and regular package purchases
+          const metadataUniqueCode = session.metadata.uniqueCode;
+          const hasValidUniqueCode = metadataUniqueCode && metadataUniqueCode !== '' && metadataUniqueCode !== 'null' && metadataUniqueCode !== 'undefined';
+          
+          // For digital/digital_physical packages, ALWAYS ensure unique code is generated
+          if (packageType === 'digital' || packageType === 'digital_physical') {
+            if (hasValidUniqueCode) {
+              uniqueCode = metadataUniqueCode;
+              console.log('✅ Using unique code from metadata:', {
+                packageId: package._id,
+                packageName: package.name,
+                packageType: packageType,
+                uniqueCode: uniqueCode
+              });
+            } else {
+              // Generate new unique code if not in metadata
+              const TransactionModel = require('../models/Transaction');
+              let generatedCode = generateUniqueCode();
+              let codeExists = await TransactionModel.findOne({ uniqueCode: generatedCode });
+              while (codeExists) {
+                generatedCode = generateUniqueCode();
+                codeExists = await TransactionModel.findOne({ uniqueCode: generatedCode });
+              }
+              uniqueCode = generatedCode;
+              console.log('✅ Generated unique code for digital package purchase (webhook):', {
+                packageId: package._id,
+                packageName: package.name,
+                packageType: packageType,
+                metadataUniqueCode: metadataUniqueCode,
+                generatedUniqueCode: uniqueCode
+              });
+            }
+          } else if (packageType === 'physical') {
+            uniqueCode = undefined;
+            console.log('⚠️ No unique code for physical package:', {
+              packageId: package._id,
+              packageName: package.name,
+              packageType: packageType
+            });
+          } else {
+            // For other package types (standard, renewal), generate unique code
+            if (!hasValidUniqueCode) {
+              const TransactionModel = require('../models/Transaction');
+              let generatedCode = generateUniqueCode();
+              let codeExists = await TransactionModel.findOne({ uniqueCode: generatedCode });
+              while (codeExists) {
+                generatedCode = generateUniqueCode();
+                codeExists = await TransactionModel.findOne({ uniqueCode: generatedCode });
+              }
+              uniqueCode = generatedCode;
+              console.log('✅ Generated unique code for standard package purchase (webhook):', {
+                packageId: package._id,
+                packageName: package.name,
+                packageType: packageType,
+                generatedUniqueCode: uniqueCode
+              });
+            } else {
+              uniqueCode = metadataUniqueCode;
+            }
+          }
+          
+          // FINAL SAFETY CHECK: Ensure unique code is generated for digital/digital_physical packages
+          // This MUST happen before Transaction.create() - cannot use await in object property
+          if ((packageType === 'digital' || packageType === 'digital_physical') && (!uniqueCode || uniqueCode === null || uniqueCode === undefined || uniqueCode === '')) {
+            console.log('🚨 CRITICAL: Unique code missing for digital package, generating now BEFORE transaction creation...', {
+              packageId: package._id,
+              packageName: package.name,
+              packageType: packageType,
+              currentUniqueCode: uniqueCode
+            });
+            const TransactionModel = require('../models/Transaction');
+            let generatedCode = generateUniqueCode();
+            let codeExists = await TransactionModel.findOne({ uniqueCode: generatedCode });
+            while (codeExists) {
+              generatedCode = generateUniqueCode();
+              codeExists = await TransactionModel.findOne({ uniqueCode: generatedCode });
+            }
+            uniqueCode = generatedCode;
+            console.log('✅ CRITICAL FIX: Generated unique code for digital package BEFORE transaction creation:', {
+              packageId: package._id,
+              packageName: package.name,
+              packageType: packageType,
+              generatedUniqueCode: uniqueCode
+            });
           }
           
           // Calculate expiry date from package expiryTime and expiryTimeUnit
@@ -934,8 +1200,9 @@ router.post('/webhook', async (req, res) => {
           paymentProvider: 'stripe',
           stripePaymentIntentId: session.payment_intent || session.id,
           // For physical products, don't save uniqueCode (no digital access code needed)
-          uniqueCode: directProductPurchase ? undefined : uniqueCode,
-          maxSeats: directProductPurchase ? 0 : maxSeats, // Physical products have 0 seats, others use maxSeats
+          // For digital/digital_physical products (shop page, Products page, or regular packages), save uniqueCode
+          uniqueCode: (packageType === 'physical') ? undefined : (uniqueCode || undefined),
+          maxSeats: (directProductPurchase && packageType) ? maxSeats : (directProductPurchase && packageType === 'physical' ? 0 : maxSeats), // Use maxSeats from metadata for Products page purchases
           usedSeats: 0,
           codeApplications: 0,
           gamePlays: [],
@@ -1161,13 +1428,22 @@ router.post('/webhook', async (req, res) => {
           // For custom packages, pass customPackage instead of package
           // For physical products (directProductPurchase), package is null, pass empty object
           const packageForEmail = customPackage || package || {};
-          // For physical products, fetch product details for email
+          // For direct product purchases (shop page or Products page), fetch product details for email
           let productForEmail = null;
           if (directProductPurchase && transaction.productId) {
             const Product = require('../models/Product');
-            productForEmail = await Product.findById(transaction.productId);
+            productForEmail = await Product.findById(transaction.productId).select('title name description price');
           }
-          await sendTransactionSuccessEmail(transaction, user, packageForEmail, organization, productForEmail);
+          // Detect shop page or Products page purchase for email service
+          // Shop page: b2c_purchase with productId and no packageId
+          // Products page: directProductPurchase with productId, packageType digital/digital_physical, and no packageId
+          const isShopPagePurchaseForEmail = (transaction.type === 'b2c_purchase' || 
+                                             (directProductPurchase && transaction.packageType && 
+                                              (transaction.packageType === 'digital' || transaction.packageType === 'digital_physical'))) &&
+                                            !transaction.packageId && 
+                                            !transaction.customPackageId && 
+                                            transaction.productId;
+          await sendTransactionSuccessEmail(transaction, user, packageForEmail, organization, productForEmail, isShopPagePurchaseForEmail);
         } catch (emailError) {
           console.error('Error sending transaction success email:', emailError);
           // Don't fail the transaction if email fails
@@ -1371,14 +1647,28 @@ router.post('/webhook', async (req, res) => {
               // Use OrganizationModel3 already declared above
               organization = await OrganizationModel3.findById(transaction.organizationId);
             }
-            // For physical products, package might be null, pass empty object
-            // Fetch product if it's a physical product
+            // For shop page or Products page purchases, fetch product details for email (all product types)
             let productForEmail = null;
-            if (transaction.packageType === 'physical' && transaction.productId) {
+            const isShopPagePurchaseForEmail = (transaction.type === 'b2c_purchase' || 
+                                               (transaction.packageType && 
+                                                (transaction.packageType === 'digital' || transaction.packageType === 'digital_physical'))) &&
+                                              !transaction.packageId && 
+                                              !transaction.customPackageId && 
+                                              transaction.productId;
+            if (isShopPagePurchaseForEmail && transaction.productId) {
               const Product = require('../models/Product');
-              productForEmail = await Product.findById(transaction.productId);
+              productForEmail = await Product.findById(transaction.productId).select('title name description price');
+              console.log('📦 Fetched product for email (webhook):', {
+                productId: transaction.productId,
+                productTitle: productForEmail?.title,
+                productName: productForEmail?.name,
+                packageType: transaction.packageType
+              });
+            } else if (transaction.packageType === 'physical' && transaction.productId) {
+              const Product = require('../models/Product');
+              productForEmail = await Product.findById(transaction.productId).select('title name description price');
             }
-            await sendTransactionSuccessEmail(transaction, user, package || {}, organization, productForEmail);
+            await sendTransactionSuccessEmail(transaction, user, package || {}, organization, productForEmail, isShopPagePurchaseForEmail);
           } catch (emailError) {
             console.error('Error sending transaction success email:', emailError);
             // Don't fail the transaction if email fails
@@ -1440,7 +1730,7 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
         const userId = session.metadata.userId;
         const packageId = session.metadata.packageId || null;
         const customPackageId = session.metadata.customPackageId || null;
-        const uniqueCode = session.metadata.uniqueCode;
+        let uniqueCode = session.metadata.uniqueCode || null;
         const billingType = session.metadata.billingType || 'one_time';
         const directProductPurchase = session.metadata.directProductPurchase === 'true';
 
@@ -1523,6 +1813,7 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
           let contractEndDate = null;
           let organizationId = null;
           let schoolId = null;
+          let uniqueCode = null; // Initialize uniqueCode for fallback transaction
           const purchaseDateForRenewal = new Date(); // Purchase date for this transaction
 
           // Handle custom package
@@ -1560,7 +1851,51 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
               // Fallback to product/package targetAudience if role doesn't match
               transactionType = getTransactionType(package, product);
             }
-            packageType = package.packageType || package.type || 'standard';
+            packageType = package.packageType || package.type || package.category || 'standard';
+            
+            // CRITICAL FIX: If productId is present, check product to determine packageType for digital/digital_physical
+            // This handles Products page purchases where package might have 'standard' type but product is digital
+            if (productId && product) {
+              const productTitle = (product.title || product.name || '').toLowerCase();
+              const isDigitalProduct = productTitle.includes('digital') || productTitle.includes('extension');
+              const isBundleProduct = productTitle.includes('bundle') || productTitle.includes('full') || productTitle.includes('best value');
+              const isPhysicalProduct = productTitle.includes('physical') || productTitle.includes('tactical');
+              
+              // Override packageType based on product if package type is 'standard' or doesn't indicate digital
+              if (packageType === 'standard' || (!packageType || packageType === null)) {
+                if (isDigitalProduct) {
+                  packageType = 'digital';
+                  console.log('🔧 FALLBACK: Override packageType to "digital" based on product:', {
+                    productId: product._id,
+                    productTitle: product.title || product.name,
+                    originalPackageType: package.packageType || package.type,
+                    newPackageType: packageType
+                  });
+                } else if (isBundleProduct) {
+                  packageType = 'digital_physical';
+                  console.log('🔧 FALLBACK: Override packageType to "digital_physical" based on product:', {
+                    productId: product._id,
+                    productTitle: product.title || product.name,
+                    originalPackageType: package.packageType || package.type,
+                    newPackageType: packageType
+                  });
+                } else if (isPhysicalProduct) {
+                  packageType = 'physical';
+                }
+              }
+            }
+            
+            console.log('📦 FALLBACK: Final packageType determined for package purchase:', {
+              packageId: package._id,
+              packageName: package.name,
+              packageTypeFromPackage: package.packageType,
+              packageTypeFromType: package.type,
+              packageTypeFromCategory: package.category,
+              productId: productId,
+              productName: product?.title || product?.name,
+              finalPackageType: packageType
+            });
+            
             maxSeats = package.maxSeats || 5;
             // Calculate expiry date from expiryTime or use expiryDate (backward compatibility)
             // Use purchase date (current date) as start date
@@ -1575,16 +1910,171 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
               endDate: contractEndDate
             });
             
+            // CRITICAL: Generate unique code for digital/digital_physical packages
+            // Check metadata first, then generate if needed
+            const metadataUniqueCode = session.metadata.uniqueCode;
+            const hasValidUniqueCode = metadataUniqueCode && metadataUniqueCode !== '' && metadataUniqueCode !== 'null' && metadataUniqueCode !== 'undefined';
+            
+            if (packageType === 'digital' || packageType === 'digital_physical') {
+              if (hasValidUniqueCode) {
+                uniqueCode = metadataUniqueCode;
+                console.log('✅ FALLBACK: Using unique code from metadata for package purchase:', {
+                  packageId: package._id,
+                  packageType: packageType,
+                  uniqueCode: uniqueCode
+                });
+              } else {
+                // Generate new unique code
+                uniqueCode = generateUniqueCode();
+                let codeExists = await Transaction.findOne({ uniqueCode });
+                while (codeExists) {
+                  uniqueCode = generateUniqueCode();
+                  codeExists = await Transaction.findOne({ uniqueCode });
+                }
+                console.log('✅ FALLBACK: Generated unique code for digital package purchase:', {
+                  packageId: package._id,
+                  packageName: package.name,
+                  packageType: packageType,
+                  generatedUniqueCode: uniqueCode
+                });
+              }
+            } else if (packageType === 'physical') {
+              uniqueCode = undefined;
+              console.log('⚠️ FALLBACK: No unique code for physical package:', {
+                packageId: package._id,
+                packageType: packageType
+              });
+            } else {
+              // For other package types (standard, renewal), generate unique code by default
+              if (!hasValidUniqueCode) {
+                uniqueCode = generateUniqueCode();
+                let codeExists = await Transaction.findOne({ uniqueCode });
+                while (codeExists) {
+                  uniqueCode = generateUniqueCode();
+                  codeExists = await Transaction.findOne({ uniqueCode });
+                }
+                console.log('✅ FALLBACK: Generated unique code for standard package purchase:', {
+                  packageId: package._id,
+                  packageType: packageType,
+                  generatedUniqueCode: uniqueCode
+                });
+              } else {
+                uniqueCode = metadataUniqueCode;
+              }
+            }
+            
             // Get organizationId or schoolId from user if they have one
             organizationId = user.organizationId || null;
             schoolId = user.schoolId || null;
           } else if (directProductPurchase) {
-            // Handle direct product purchase (for physical products)
+            // Handle direct product purchase (for shop page products)
             const ProductForTransaction = require('../models/Product');
             const productForTransaction = await ProductForTransaction.findById(productId);
             
             if (!productForTransaction) {
               return res.status(404).json({ error: 'Product not found' });
+            }
+            
+            // Check if this is a shop page purchase from metadata or detect from referrer
+            let isShopPagePurchaseFromMetadata = session.metadata.shopPagePurchase === 'true';
+            
+            // Also try to detect from referrer URL if metadata is not available
+            if (!isShopPagePurchaseFromMetadata && session.metadata.referrerUrl) {
+              const referrerUrl = session.metadata.referrerUrl.toLowerCase();
+              isShopPagePurchaseFromMetadata = referrerUrl.includes('sskit-family');
+            }
+            
+            // Get packageType and maxSeats from metadata if shop page purchase
+            const metadataPackageType = session.metadata.packageType || null;
+            const metadataMaxSeats = session.metadata.maxSeats ? parseInt(session.metadata.maxSeats) : null;
+            
+            if (isShopPagePurchaseFromMetadata && metadataPackageType) {
+              // Shop page purchase - use metadata values
+              packageType = metadataPackageType;
+              if (metadataMaxSeats !== null && !isNaN(metadataMaxSeats)) {
+                maxSeats = metadataMaxSeats;
+              } else {
+                // Default based on packageType
+                if (packageType === 'physical') {
+                  maxSeats = 0;
+                } else if (packageType === 'digital' || packageType === 'digital_physical') {
+                  maxSeats = 1;
+                } else {
+                  maxSeats = 1;
+                }
+              }
+              
+              // Generate unique code for digital and bundle products
+              if (packageType === 'digital' || packageType === 'digital_physical') {
+                // Check if uniqueCode was already generated in metadata
+                const metadataUniqueCode = session.metadata.uniqueCode;
+                if (metadataUniqueCode && metadataUniqueCode !== '' && metadataUniqueCode !== 'null') {
+                  uniqueCode = metadataUniqueCode;
+                } else {
+                  // Generate new unique code (generateUniqueCode function is defined at top of file)
+                  uniqueCode = generateUniqueCode();
+                  let codeExists = await Transaction.findOne({ uniqueCode });
+                  while (codeExists) {
+                    uniqueCode = generateUniqueCode();
+                    codeExists = await Transaction.findOne({ uniqueCode });
+                  }
+                }
+              } else {
+                uniqueCode = undefined; // No unique code for physical products
+              }
+              
+              console.log('✅ Shop page purchase detected in fallback:', {
+                productId: productForTransaction._id,
+                packageType: packageType,
+                maxSeats: maxSeats,
+                hasUniqueCode: !!uniqueCode
+              });
+            } else if (metadataPackageType) {
+              // Products page purchase (not shop page) - use metadata packageType
+              packageType = metadataPackageType;
+              if (metadataMaxSeats !== null && !isNaN(metadataMaxSeats)) {
+                maxSeats = metadataMaxSeats;
+              } else {
+                // Default based on packageType
+                if (packageType === 'physical') {
+                  maxSeats = 0;
+                } else if (packageType === 'digital' || packageType === 'digital_physical') {
+                  maxSeats = 1;
+                } else {
+                  maxSeats = 1;
+                }
+              }
+              
+              // Generate unique code for digital and bundle products from Products page
+              if (packageType === 'digital' || packageType === 'digital_physical') {
+                // Check if uniqueCode was already generated in metadata
+                const metadataUniqueCode = session.metadata.uniqueCode;
+                if (metadataUniqueCode && metadataUniqueCode !== '' && metadataUniqueCode !== 'null') {
+                  uniqueCode = metadataUniqueCode;
+                } else {
+                  // Generate new unique code
+                  uniqueCode = generateUniqueCode();
+                  let codeExists = await Transaction.findOne({ uniqueCode });
+                  while (codeExists) {
+                    uniqueCode = generateUniqueCode();
+                    codeExists = await Transaction.findOne({ uniqueCode });
+                  }
+                }
+              } else {
+                uniqueCode = undefined; // No unique code for physical products
+              }
+              
+              console.log('✅ Products page purchase detected in fallback:', {
+                productId: productForTransaction._id,
+                packageType: packageType,
+                maxSeats: maxSeats,
+                hasUniqueCode: !!uniqueCode
+              });
+            } else {
+              // Regular direct product purchase (not from shop page or products page)
+              packageType = 'physical'; // Set to 'physical' for tactical card purchases
+              maxSeats = 0; // Physical products have 0 seats (no digital access)
+              uniqueCode = undefined; // No unique code for physical products
             }
             
             // Determine transaction type based on urlType from session metadata
@@ -1606,10 +2096,7 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
               }
             }
             
-            packageType = 'physical'; // Set to 'physical' for tactical card purchases
-            maxSeats = 0; // Physical products have 0 seats (no digital access)
-            
-            // For physical products, typically no expiry or 1 year
+            // For all direct product purchases, typically 1 year expiry
             const expiryDate = new Date(purchaseDateForRenewal);
             expiryDate.setFullYear(expiryDate.getFullYear() + 1); // 1 year from purchase
             contractEndDate = setEndOfDay(expiryDate);
@@ -1639,8 +2126,35 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             schoolId: schoolId || user?.schoolId || ownerSchoolId,
             organizationId: organizationId || user?.organizationId || ownerOrgId,
             email: user?.email,
-            isCustomPackage: !!customPackage
+            isCustomPackage: !!customPackage,
+            packageType: packageType,
+            hasUniqueCode: !!uniqueCode
           });
+
+          // FINAL SAFETY CHECK: Ensure unique code is generated for digital/digital_physical packages
+          // This MUST happen before Transaction.create() in fallback path
+          if ((packageType === 'digital' || packageType === 'digital_physical') && (!uniqueCode || uniqueCode === null || uniqueCode === undefined || uniqueCode === '')) {
+            console.log('🚨 CRITICAL FALLBACK: Unique code missing for digital package, generating now BEFORE transaction creation...', {
+              packageId: package?._id,
+              packageName: package?.name,
+              packageType: packageType,
+              productId: productId,
+              currentUniqueCode: uniqueCode
+            });
+            let generatedCode = generateUniqueCode();
+            let codeExists = await Transaction.findOne({ uniqueCode: generatedCode });
+            while (codeExists) {
+              generatedCode = generateUniqueCode();
+              codeExists = await Transaction.findOne({ uniqueCode: generatedCode });
+            }
+            uniqueCode = generatedCode;
+            console.log('✅ CRITICAL FALLBACK FIX: Generated unique code for digital package BEFORE transaction creation:', {
+              packageId: package?._id,
+              packageName: package?.name,
+              packageType: packageType,
+              generatedUniqueCode: uniqueCode
+            });
+          }
 
           // Create transaction
           // For direct product purchases (physical), don't save packageId but save packageType as 'physical' and no uniqueCode
@@ -1660,7 +2174,8 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             paymentProvider: 'stripe',
             stripePaymentIntentId: session.payment_intent || session.id,
             // For physical products, don't save uniqueCode (no digital access code needed)
-            uniqueCode: directProductPurchase ? undefined : uniqueCode,
+            // For digital/digital_physical products (shop page, Products page, or regular packages), save uniqueCode
+            uniqueCode: (packageType === 'physical') ? undefined : (uniqueCode || undefined),
             maxSeats: maxSeats,
             usedSeats: 0,
             codeApplications: 0,
@@ -1875,13 +2390,28 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             }
             // For custom packages, pass customPackage instead of package
             const packageForEmail = customPackage || package || {};
-            // Fetch product if it's a physical product
+            // For shop page or Products page purchases, fetch product details for email (all product types)
             let productForEmail = null;
-            if (transaction.packageType === 'physical' && transaction.productId) {
+            const isShopPagePurchaseForEmail = (transaction.type === 'b2c_purchase' || 
+                                               (transaction.packageType && 
+                                                (transaction.packageType === 'digital' || transaction.packageType === 'digital_physical'))) &&
+                                              !transaction.packageId && 
+                                              !transaction.customPackageId && 
+                                              transaction.productId;
+            if (isShopPagePurchaseForEmail && transaction.productId) {
               const Product = require('../models/Product');
-              productForEmail = await Product.findById(transaction.productId);
+              productForEmail = await Product.findById(transaction.productId).select('title name description price');
+              console.log('📦 Fetched product for email (fallback):', {
+                productId: transaction.productId,
+                productTitle: productForEmail?.title,
+                productName: productForEmail?.name,
+                packageType: transaction.packageType
+              });
+            } else if (transaction.packageType === 'physical' && transaction.productId) {
+              const Product = require('../models/Product');
+              productForEmail = await Product.findById(transaction.productId).select('title name description price');
             }
-            await sendTransactionSuccessEmail(transaction, user, packageForEmail, organization, productForEmail);
+            await sendTransactionSuccessEmail(transaction, user, packageForEmail, organization, productForEmail, isShopPagePurchaseForEmail);
           } catch (emailError) {
             console.error('Error sending transaction success email:', emailError);
             // Don't fail the transaction if email fails

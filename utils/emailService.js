@@ -596,7 +596,7 @@ const calculateExpiryInfo = (endDate) => {
   }
 };
 
-const createTransactionSuccessEmailTemplate = (transaction, user, package, organization = null, product = null) => {
+const createTransactionSuccessEmailTemplate = (transaction, user, package, organization = null, product = null, isShopPagePurchase = false) => {
   const formatDate = (date) => {
     if (!date) return 'N/A';
     return new Date(date).toLocaleDateString('en-US', { 
@@ -615,8 +615,16 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
   const packageType = transaction.packageType || (package ? (package.packageType || package.type || package.category) : null) || 'standard';
   const packageTypeLabel = getPackageTypeLabel(packageType);
   
+  // Ensure isShopPagePurchase is defined (default to false if not passed)
+  // This must be done BEFORE using it in expiryInfo calculation
+  const shopPagePurchaseFlag = (typeof isShopPagePurchase !== 'undefined') ? isShopPagePurchase : false;
+  
   // Calculate expiry information
-  const expiryInfo = transaction.contractPeriod?.endDate ? calculateExpiryInfo(transaction.contractPeriod.endDate) : null;
+  // For shop page physical purchases, no expiry info (physical delivery only)
+  // For shop page digital/digital_physical, show expiry info
+  const expiryInfo = (shopPagePurchaseFlag && packageType === 'physical') 
+    ? null 
+    : (transaction.contractPeriod?.endDate ? calculateExpiryInfo(transaction.contractPeriod.endDate) : null);
 
   return `
 <!DOCTYPE html>
@@ -649,7 +657,11 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
               </p>
               
               <p style="margin: 0 0 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">
-                ${packageType === 'physical' ? 'Thank you for purchasing the Tactical Card Game Kit! Your payment has been successfully processed. Your physical cards will be shipped to you soon.' : 'Thank you for your purchase! Your payment has been successfully processed.'}
+                ${shopPagePurchaseFlag && product 
+                  ? `Thank you for purchasing ${product.title || product.name || 'the product'}! Your payment has been successfully processed.${packageType === 'physical' ? ' Your physical cards will be shipped to you soon.' : ''}`
+                  : packageType === 'physical' 
+                    ? `Thank you for purchasing ${product?.title || product?.name || 'the Tactical Card Game Kit'}! Your payment has been successfully processed. Your physical cards will be shipped to you soon.`
+                    : 'Thank you for your purchase! Your payment has been successfully processed.'}
               </p>
 
               ${packageType !== 'physical' && transaction.uniqueCode ? `
@@ -672,8 +684,43 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
               </table>
               ` : ''}
               
-              ${packageType === 'physical' && product ? `
-              <!-- Product Details - Only for physical products -->
+              ${shopPagePurchaseFlag && product ? `
+              <!-- Product Details for Shop Page Purchases -->
+              <div style="background-color: ${colors.background}; padding: 20px; border-radius: 6px; margin: 20px 0;">
+                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">Product Details</h3>
+                <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Product Name:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${product.title || product.name || 'Product'}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Product Type:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">
+                      <span style="background-color: ${packageType === 'physical' ? '#FF6B6B' : packageType === 'digital' ? '#4ECDC4' : '#95E1D3'}; color: white; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; text-transform: uppercase;">
+                        ${packageType === 'physical' ? 'Physical' : packageType === 'digital' ? 'Digital Package' : 'Digital + Physical Package'}
+                      </span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Amount Paid:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.primary}; font-size: 16px; font-weight: 700;">
+                      $${transaction.amount || 0}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Purchase Date:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${formatDate(transaction.createdAt || transaction.contractPeriod?.startDate)}</td>
+                  </tr>
+                  ${packageType !== 'physical' && transaction.contractPeriod?.endDate ? `
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Expiry Date:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${formatDate(transaction.contractPeriod.endDate)}</td>
+                  </tr>
+                  ` : ''}
+                </table>
+              </div>
+              ` : packageType === 'physical' && product ? `
+              <!-- Product Details - Only for physical products (non-shop page) -->
               <div style="background-color: ${colors.background}; padding: 20px; border-radius: 6px; margin: 20px 0;">
                 <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">Product Details</h3>
                 <table role="presentation" style="width: 100%; border-collapse: collapse;">
@@ -772,8 +819,20 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
               </div>
               ` : ''}
               
-              ${packageType !== 'physical' && transaction.uniqueCode ? `
-              <!-- Instructions - Only for non-physical packages -->
+              ${shopPagePurchaseFlag && packageType !== 'physical' && transaction.uniqueCode ? `
+              <!-- Instructions for Shop Page Digital/Bundle Products -->
+              <div style="background-color: #FFF9E6; border-left: 4px solid ${colors.accent}; padding: 20px; margin: 20px 0; border-radius: 4px;">
+                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">How to Use Your Code</h3>
+                <ol style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
+                  <li style="margin-bottom: 10px;">Visit the game page on Konfydence website</li>
+                  <li style="margin-bottom: 10px;">Enter your unique code: <strong style="color: ${colors.primary}; font-family: 'Courier New', monospace;">${transaction.uniqueCode}</strong></li>
+                  <li style="margin-bottom: 10px;">Start playing the game with your ${transaction.maxSeats || 1} seat${(transaction.maxSeats || 1) > 1 ? 's' : ''}</li>
+                  <li>Each seat can be used once to play the game</li>
+                  ${packageType === 'digital_physical' ? '<li style="margin-top: 10px;">Physical cards will be delivered separately to your registered address</li>' : ''}
+                </ol>
+              </div>
+              ` : packageType !== 'physical' && transaction.uniqueCode ? `
+              <!-- Instructions - Only for non-physical packages (non-shop page) -->
               <div style="background-color: #FFF9E6; border-left: 4px solid ${colors.accent}; padding: 20px; margin: 20px 0; border-radius: 4px;">
                 <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">How to Use Your Code</h3>
                 <ol style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
@@ -856,7 +915,7 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
   `;
 };
 
-const sendTransactionSuccessEmail = async (transaction, user, package, organization = null, product = null) => {
+const sendTransactionSuccessEmail = async (transaction, user, package, organization = null, product = null, isShopPagePurchaseParam = false) => {
   try {
     // Check if email service is configured
     if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
@@ -880,10 +939,29 @@ const sendTransactionSuccessEmail = async (transaction, user, package, organizat
     // Calculate package type and expiry info before creating template
     const packageType = transaction.packageType || package.packageType || package.type || package.category || 'standard';
     const packageTypeLabel = getPackageTypeLabel(packageType);
-    const expiryInfo = transaction.contractPeriod?.endDate ? calculateExpiryInfo(transaction.contractPeriod.endDate) : null;
+    
+    // Detect if this is a shop page or Products page purchase (direct product purchase with productId but no packageId/customPackageId)
+    // Shop page: b2c_purchase
+    // Products page: direct product purchase with packageType digital/digital_physical
+    const isShopPagePurchase = isShopPagePurchaseParam || 
+                               (transaction.type === 'b2c_purchase' && 
+                                !transaction.packageId && 
+                                !transaction.customPackageId && 
+                                transaction.productId) ||
+                               (!transaction.packageId && 
+                                !transaction.customPackageId && 
+                                transaction.productId &&
+                                transaction.packageType &&
+                                (transaction.packageType === 'digital' || transaction.packageType === 'digital_physical'));
+    
+    // For shop page/Products page physical purchases, no expiry info (physical delivery only)
+    // For shop page/Products page digital/digital_physical, show expiry info
+    const expiryInfo = (isShopPagePurchase && packageType === 'physical') 
+      ? null 
+      : (transaction.contractPeriod?.endDate ? calculateExpiryInfo(transaction.contractPeriod.endDate) : null);
 
     const transporter = createTransporter();
-    const emailHtml = createTransactionSuccessEmailTemplate(transaction, user, package, organization, product);
+    const emailHtml = createTransactionSuccessEmailTemplate(transaction, user, package, organization, product, isShopPagePurchase);
 
     const isOrganizationTransaction = transaction.type === 'b2b_contract' || transaction.type === 'b2e_contract';
     const organizationName = organization?.name || (isOrganizationTransaction ? 'Your Organization' : null);
@@ -958,9 +1036,11 @@ The Konfydence Team`;
     const mailOptions = {
       from: `"Konfydence" <${process.env.SMTP_USER}>`,
       to: user.email,
-      subject: packageType === 'physical' 
-        ? `Payment Successful - ${product?.title || product?.name || 'Your Physical Card Game Kit Order'}` 
-        : `Payment Successful - Your Unique Code: ${transaction.uniqueCode || 'N/A'}`,
+      subject: isShopPagePurchase && product
+        ? `Payment Successful - ${product.title || product.name || 'Product Purchase'}`
+        : packageType === 'physical' && product
+          ? `Payment Successful - ${product.title || product.name || 'Physical Card Game Kit'}`
+          : `Payment Successful - Your Unique Code: ${transaction.uniqueCode || 'N/A'}`,
       html: emailHtml,
       text: textVersion,
       // Add headers similar to verification emails
