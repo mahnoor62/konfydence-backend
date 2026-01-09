@@ -237,10 +237,11 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       return res.status(500).json({ error: 'Stripe is not configured. Please set STRIPE_SECRET_KEY in environment variables.' });
     }
 
-    const { packageId, productId, customPackageId, urlType } = req.body;
+    const { packageId, productId, customPackageId, urlType, directProductPurchase } = req.body;
     
-    if (!packageId && !customPackageId) {
-      return res.status(400).json({ error: 'Package ID or Custom Package ID is required' });
+    // Allow direct product purchase (for physical products) without package
+    if (!packageId && !customPackageId && !directProductPurchase) {
+      return res.status(400).json({ error: 'Package ID, Custom Package ID, or direct product purchase is required' });
     }
 
     const user = await User.findById(req.userId);
@@ -257,6 +258,11 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
         return res.status(404).json({ error: 'Product not found' });
       }
       
+      // For direct product purchases, ensure product is valid
+      if (directProductPurchase && (!product.price || product.price <= 0)) {
+        return res.status(400).json({ error: 'Product price is invalid' });
+      }
+      
       const userRole = user.role;
       
       // Check if URL type matches user role - if yes, skip product category validation
@@ -270,25 +276,72 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       }
       
       // If URL type matches user role, skip product category check (user chose correct type)
-      if (!urlTypeMatchesRole) {
+      if (!urlTypeMatchesRole && !directProductPurchase) {
         // Check if user can purchase this product based on their role
-        const productCategory = product.category || product.targetAudience; // Support both fields: 'private-users', 'schools', 'businesses'
-        
-        if (userRole === 'b2c_user' && productCategory !== 'private-users') {
-          return res.status(403).json({ 
-            error: 'You are a B2C user. You can only purchase B2C products.' 
-          });
+        // Support both single value and array for targetAudience
+        let productTargetAudiences = product.targetAudience || product.category;
+        if (!Array.isArray(productTargetAudiences)) {
+          productTargetAudiences = productTargetAudiences ? [productTargetAudiences] : [];
         }
         
-        if ((userRole === 'b2b_user' || userRole === 'b2b_member') && productCategory !== 'businesses') {
-          return res.status(403).json({ 
-            error: 'You are a B2B user. You can only purchase B2B products.' 
-          });
+        // Convert to standard format: 'private-users' -> 'B2C', 'businesses' -> 'B2B', 'schools' -> 'B2E'
+        const normalizedAudiences = productTargetAudiences.map(aud => {
+          if (aud === 'private-users') return 'B2C';
+          if (aud === 'businesses') return 'B2B';
+          if (aud === 'schools') return 'B2E';
+          return aud;
+        });
+        
+        if (userRole === 'b2c_user') {
+          // B2C users can only purchase B2C products
+          if (!normalizedAudiences.includes('B2C')) {
+            return res.status(403).json({ 
+              error: 'You are a B2C user. You can only purchase B2C products.' 
+            });
+          }
+        } else if (userRole === 'b2b_user' || userRole === 'b2b_member') {
+          // B2B users can purchase B2B and B2E products (both are organizational)
+          if (!normalizedAudiences.includes('B2B') && !normalizedAudiences.includes('B2E')) {
+            return res.status(403).json({ 
+              error: 'You are a B2B user. You can only purchase B2B or B2E products.' 
+            });
+          }
+        } else if (userRole === 'b2e_user' || userRole === 'b2e_member') {
+          // B2E users can purchase B2B and B2E products (both are organizational)
+          if (!normalizedAudiences.includes('B2B') && !normalizedAudiences.includes('B2E')) {
+            return res.status(403).json({ 
+              error: 'You are a B2E user. You can only purchase B2B or B2E products.' 
+            });
+          }
+        }
+      }
+      
+      // For direct product purchases, allow if URL type matches or if product targetAudience matches user role
+      if (directProductPurchase && !urlTypeMatchesRole) {
+        let productTargetAudiences = product.targetAudience || product.category;
+        if (!Array.isArray(productTargetAudiences)) {
+          productTargetAudiences = productTargetAudiences ? [productTargetAudiences] : [];
         }
         
-        if ((userRole === 'b2e_user' || userRole === 'b2e_member') && productCategory !== 'schools') {
+        const normalizedAudiences = productTargetAudiences.map(aud => {
+          if (aud === 'private-users') return 'B2C';
+          if (aud === 'businesses') return 'B2B';
+          if (aud === 'schools') return 'B2E';
+          return aud;
+        });
+        
+        // Allow direct purchases if:
+        // 1. URL type is B2E and product is B2E or B2B (organizational)
+        // 2. URL type is B2B and product is B2B or B2E (organizational)
+        // 3. URL type is B2C and product is B2C
+        const isAllowed = 
+          (urlType === 'B2E' && (normalizedAudiences.includes('B2E') || normalizedAudiences.includes('B2B'))) ||
+          (urlType === 'B2B' && (normalizedAudiences.includes('B2B') || normalizedAudiences.includes('B2E'))) ||
+          (urlType === 'B2C' && normalizedAudiences.includes('B2C'));
+        
+        if (!isAllowed) {
           return res.status(403).json({ 
-            error: 'You are a B2E user. You can only purchase B2E products.' 
+            error: `You cannot purchase this product. Please select a product that matches your account type (${urlType}).` 
           });
         }
       }
@@ -300,7 +353,7 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
     let packageName = '';
     let packageDescription = '';
     let billingType = 'one_time';
-    let currency = 'EUR';
+    let currency = 'USD';
     let seatLimit = 5;
 
     // Handle custom package purchase
@@ -345,8 +398,33 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       packageName = customPackage.name || customPackage.basePackageId?.name || 'Custom Package';
       packageDescription = customPackage.description || customPackage.basePackageId?.description || '';
       billingType = pricing.billingType || 'one_time';
-      currency = pricing.currency || 'EUR';
+      currency = pricing.currency || 'USD';
       seatLimit = customPackage.seatLimit || 5;
+    } else if (directProductPurchase && productId) {
+      // Handle direct product purchase (for physical products)
+      if (!product) {
+        return res.status(404).json({ error: 'Product not found' });
+      }
+      
+      // Use product price directly
+      pricing = {
+        amount: product.price || 0,
+        currency: 'USD', // Always USD for direct product purchases
+        billingType: 'one_time'
+      };
+      packageName = product.title || product.name || 'Physical Product';
+      // Stripe requires non-empty description, so use product description or default text
+      packageDescription = product.description || product.title || product.name || 'Physical product purchase';
+      // Remove HTML tags if present
+      if (packageDescription) {
+        packageDescription = packageDescription.replace(/<[^>]*>/g, '').trim();
+      }
+      if (!packageDescription) {
+        packageDescription = 'Physical product purchase';
+      }
+      billingType = 'one_time';
+      currency = 'USD';
+      seatLimit = 1; // Default 1 seat for B2C direct purchases
     } else {
       // Handle regular package purchase
       package = await Package.findById(packageId);
@@ -382,8 +460,13 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       packageName = package.name;
       packageDescription = package.description || '';
       billingType = pricing.billingType || 'one_time';
-      currency = pricing.currency || 'EUR';
-      seatLimit = package.maxSeats || 5;
+      currency = pricing.currency || 'USD';
+      // For B2C packages, default maxSeats to 1
+      if (package.targetAudiences && package.targetAudiences.includes('B2C')) {
+        seatLimit = package.maxSeats || 1;
+      } else {
+        seatLimit = package.maxSeats || 5;
+      }
     }
 
     if (!stripe) {
@@ -406,10 +489,11 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
     const lineItems = [
       {
         price_data: {
-          currency: currency?.toLowerCase() || 'eur',
+          currency: currency?.toLowerCase() || 'usd',
           product_data: {
-            name: packageName,
-            description: packageDescription || '',
+            name: packageName || 'Product',
+            // Only include description if it's not empty (Stripe doesn't accept empty strings)
+            ...(packageDescription && packageDescription.trim() ? { description: packageDescription.trim() } : {}),
           },
           unit_amount: Math.round(pricing.amount * 100), // Convert to cents
           // Add recurring for subscription mode
@@ -423,21 +507,29 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       },
     ];
 
-    // Prepare metadata (different for custom packages vs regular packages)
+    // Prepare metadata (different for custom packages vs regular packages vs direct product purchase)
     const metadata = {
       userId: req.userId.toString(),
       productId: productId ? productId.toString() : '',
       packageName: packageName,
       uniqueCode: uniqueCode,
       billingType: billingType || 'one_time',
+      directProductPurchase: directProductPurchase ? 'true' : 'false',
+      seatLimit: seatLimit.toString(),
+      urlType: urlType || '', // Store urlType for transaction type determination
     };
-
-    // Add packageId or customPackageId to metadata
-    if (customPackageId) {
-      metadata.customPackageId = customPackageId.toString();
-    } else if (packageId) {
+    
+    // Only add packageId to metadata if it exists AND it's not a direct product purchase
+    // For physical product purchases, packageId should NOT be sent
+    if (packageId && !directProductPurchase) {
       metadata.packageId = packageId.toString();
     }
+    
+    // Only add customPackageId to metadata if it exists
+    if (customPackageId) {
+      metadata.customPackageId = customPackageId.toString();
+    }
+
 
     // Create Stripe Checkout Session
     const session = await stripe.checkout.sessions.create({
@@ -456,12 +548,36 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       uniqueCode: uniqueCode,
     });
   } catch (error) {
+    // Safely get values from req.body in case variables are not in scope
+    const errorPackageId = req.body?.packageId || null;
+    const errorProductId = req.body?.productId || null;
+    const errorDirectProductPurchase = req.body?.directProductPurchase || false;
+    
+    // Safely get package info if it was loaded
+    let errorPackageName = null;
+    let errorBillingType = null;
+    try {
+      if (typeof package !== 'undefined' && package) {
+        errorPackageName = package.name || null;
+        errorBillingType = package.pricing?.billingType || null;
+      } else if (typeof packageName !== 'undefined') {
+        errorPackageName = packageName;
+      }
+      if (!errorBillingType && typeof billingType !== 'undefined') {
+        errorBillingType = billingType;
+      }
+    } catch (e) {
+      // Variables not in scope, ignore
+    }
+    
     console.error('Error creating checkout session:', {
       error: error.message,
       stack: error.stack,
-      packageId: packageId,
-      packageName: package?.name,
-      billingType: package?.pricing?.billingType,
+      packageId: errorPackageId,
+      productId: errorProductId,
+      directProductPurchase: errorDirectProductPurchase,
+      packageName: errorPackageName,
+      billingType: errorBillingType,
       stripeError: error.type || error.code,
     });
     
@@ -527,7 +643,8 @@ router.post('/webhook', async (req, res) => {
         let productId = session.metadata.productId || null; // Use let instead of const to allow updating
         const uniqueCode = session.metadata.uniqueCode;
         const billingType = session.metadata.billingType || 'one_time';
-        const seatLimit = parseInt(session.metadata.seatLimit) || 5;
+        const directProductPurchase = session.metadata.directProductPurchase === 'true';
+        const seatLimit = directProductPurchase ? 1 : (parseInt(session.metadata.seatLimit) || 5); // Default 1 for direct product purchase
         
         // Purchase date is when the transaction is created (now)
         const purchaseDate = new Date();
@@ -651,6 +768,53 @@ router.post('/webhook', async (req, res) => {
               console.log(`✅ Custom package request ${relatedRequest._id} marked as completed after purchase (found by customPackageId)`);
             }
           }
+        } else if (directProductPurchase && productId) {
+          // Handle direct product purchase (for physical products)
+          const Product = require('../models/Product');
+          const product = await Product.findById(productId);
+          
+          if (!product) {
+            console.error('Product not found for direct purchase:', productId);
+            return res.json({ received: true, error: 'Product not found' });
+          }
+          
+          // Determine transaction type based on urlType from session metadata
+          const urlType = session.metadata.urlType || null;
+          if (urlType === 'B2B') {
+            transactionType = 'b2b_contract';
+          } else if (urlType === 'B2E') {
+            transactionType = 'b2e_contract';
+          } else if (urlType === 'B2C') {
+            transactionType = 'b2c_purchase';
+          } else {
+            // Fallback: determine from user role if urlType is not available
+            if (user.role === 'b2b_user' || user.role === 'b2b_member') {
+              transactionType = 'b2b_contract';
+            } else if (user.role === 'b2e_user' || user.role === 'b2e_member') {
+              transactionType = 'b2e_contract';
+            } else {
+              transactionType = 'b2c_purchase';
+            }
+          }
+          
+          packageType = 'physical'; // Set to 'physical' for tactical card purchases
+          maxSeats = 0; // Physical products have 0 seats (no digital access)
+          
+          // For physical products, typically no expiry or 1 year
+          const expiryDate = new Date(purchaseDate);
+          expiryDate.setFullYear(expiryDate.getFullYear() + 1); // 1 year from purchase
+          contractEndDate = setEndOfDay(expiryDate);
+          
+          console.log('✅ Direct product purchase:', {
+            productId: product._id,
+            productName: product.title || product.name,
+            price: product.price,
+            urlType: urlType,
+            userRole: user.role,
+            transactionType: transactionType,
+            packageType: packageType,
+            maxSeats: maxSeats
+          });
         } else if (packageId) {
           // Handle regular package purchase
           package = await Package.findById(packageId);
@@ -680,7 +844,12 @@ router.post('/webhook', async (req, res) => {
             transactionType = getTransactionType(package, product);
           }
           packageType = package.packageType || package.type || 'standard';
-          maxSeats = package.maxSeats || seatLimit;
+          // For B2C packages, default maxSeats to 1
+          if (package.targetAudiences && package.targetAudiences.includes('B2C')) {
+            maxSeats = package.maxSeats || 1;
+          } else {
+            maxSeats = package.maxSeats || seatLimit;
+          }
           
           // Calculate expiry date from package expiryTime and expiryTimeUnit
           // Start date is purchase date, end date is calculated from purchase date + expiry time
@@ -699,8 +868,8 @@ router.post('/webhook', async (req, res) => {
             console.log('⚠️ No expiry time set for package, using default or subscription end date');
           }
         } else {
-          console.error('Neither packageId nor customPackageId found in session metadata:', session.id);
-          return res.json({ received: true, error: 'Package ID or Custom Package ID required' });
+          console.error('Neither packageId, customPackageId, nor directProductPurchase found in session metadata:', session.id);
+          return res.json({ received: true, error: 'Package ID, Custom Package ID, or direct product purchase required' });
         }
 
         // Check if user already has this package (prevent duplicate memberships) - only for regular packages
@@ -717,7 +886,7 @@ router.post('/webhook', async (req, res) => {
 
         // Get payment amount from session
         const amount = session.amount_total ? session.amount_total / 100 : session.amount_subtotal / 100;
-        const currency = session.currency?.toUpperCase() || 'EUR';
+        const currency = session.currency?.toUpperCase() || 'USD';
 
         // Get organizationId or schoolId from custom package or user
         let organizationId = null;
@@ -748,22 +917,25 @@ router.post('/webhook', async (req, res) => {
         } catch (e) {}
 
         // Create transaction ONLY when payment succeeds
+        // For direct product purchases, don't save any package-related fields
         transaction = await Transaction.create({
           type: transactionType,
           userId: userId,
           organizationId: organizationId || ownerOrgId, // Set organizationId from custom package, user, or owner
           schoolId: schoolId || ownerSchoolId, // Set schoolId from custom package, user, or owner
-          packageId: packageId || null, // Regular package ID
-          customPackageId: customPackageId || null, // Custom package ID
-          packageType: packageType,
+          // For direct product purchases, packageId is undefined but packageType is 'physical' and no uniqueCode
+          packageId: directProductPurchase ? undefined : (packageId || null), // Regular package ID (undefined for direct product purchase)
+          customPackageId: directProductPurchase ? undefined : (customPackageId || null), // Custom package ID (undefined for direct product purchase)
+          packageType: packageType || null, // Package type ('physical' for direct product purchases)
           productId: productId || null,
           amount: amount,
           currency: currency,
           status: 'paid',
           paymentProvider: 'stripe',
           stripePaymentIntentId: session.payment_intent || session.id,
-          uniqueCode: uniqueCode,
-          maxSeats: maxSeats, // From custom package or regular package
+          // For physical products, don't save uniqueCode (no digital access code needed)
+          uniqueCode: directProductPurchase ? undefined : uniqueCode,
+          maxSeats: directProductPurchase ? 0 : maxSeats, // Physical products have 0 seats, others use maxSeats
           usedSeats: 0,
           codeApplications: 0,
           gamePlays: [],
@@ -987,8 +1159,15 @@ router.post('/webhook', async (req, res) => {
             organization = await Organization.findById(transaction.organizationId);
           }
           // For custom packages, pass customPackage instead of package
-          const packageForEmail = customPackage || package;
-          await sendTransactionSuccessEmail(transaction, user, packageForEmail, organization);
+          // For physical products (directProductPurchase), package is null, pass empty object
+          const packageForEmail = customPackage || package || {};
+          // For physical products, fetch product details for email
+          let productForEmail = null;
+          if (directProductPurchase && transaction.productId) {
+            const Product = require('../models/Product');
+            productForEmail = await Product.findById(transaction.productId);
+          }
+          await sendTransactionSuccessEmail(transaction, user, packageForEmail, organization, productForEmail);
         } catch (emailError) {
           console.error('Error sending transaction success email:', emailError);
           // Don't fail the transaction if email fails
@@ -1192,7 +1371,14 @@ router.post('/webhook', async (req, res) => {
               // Use OrganizationModel3 already declared above
               organization = await OrganizationModel3.findById(transaction.organizationId);
             }
-            await sendTransactionSuccessEmail(transaction, user, package, organization);
+            // For physical products, package might be null, pass empty object
+            // Fetch product if it's a physical product
+            let productForEmail = null;
+            if (transaction.packageType === 'physical' && transaction.productId) {
+              const Product = require('../models/Product');
+              productForEmail = await Product.findById(transaction.productId);
+            }
+            await sendTransactionSuccessEmail(transaction, user, package || {}, organization, productForEmail);
           } catch (emailError) {
             console.error('Error sending transaction success email:', emailError);
             // Don't fail the transaction if email fails
@@ -1249,42 +1435,47 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
       .populate('packageId', 'name')
       .populate('userId', 'name email');
 
-    // If transaction doesn't exist but payment is complete, create it (fallback for when webhook hasn't fired)
-    if (!transaction && session.payment_status === 'paid') {
-      const userId = session.metadata.userId;
-      const packageId = session.metadata.packageId || null;
-      const customPackageId = session.metadata.customPackageId || null;
-      const uniqueCode = session.metadata.uniqueCode;
-      const billingType = session.metadata.billingType || 'one_time';
+      // If transaction doesn't exist but payment is complete, create it (fallback for when webhook hasn't fired)
+      if (!transaction && session.payment_status === 'paid') {
+        const userId = session.metadata.userId;
+        const packageId = session.metadata.packageId || null;
+        const customPackageId = session.metadata.customPackageId || null;
+        const uniqueCode = session.metadata.uniqueCode;
+        const billingType = session.metadata.billingType || 'one_time';
+        const directProductPurchase = session.metadata.directProductPurchase === 'true';
 
-      // Verify user exists
-      const user = await User.findById(userId);
-      if (!user) {
-        return res.status(404).json({ error: 'User not found' });
-      }
+        // Verify user exists
+        const user = await User.findById(userId);
+        if (!user) {
+          return res.status(404).json({ error: 'User not found' });
+        }
 
-      let package = null;
-      let customPackage = null;
-      
-      // Handle custom package or regular package
-      if (customPackageId) {
-        const CustomPackage = require('../models/CustomPackage');
-        customPackage = await CustomPackage.findById(customPackageId)
-          .populate('basePackageId')
-          .populate('organizationId')
-          .populate('schoolId');
+        let package = null;
+        let customPackage = null;
         
-        if (!customPackage) {
-          return res.status(404).json({ error: 'Custom package not found' });
+        // Handle direct product purchase (no package required)
+        if (directProductPurchase) {
+          // For direct product purchases, we don't need packageId or customPackageId
+          // Transaction will be created with packageId as null
+        } else if (customPackageId) {
+          // Handle custom package or regular package
+          const CustomPackage = require('../models/CustomPackage');
+          customPackage = await CustomPackage.findById(customPackageId)
+            .populate('basePackageId')
+            .populate('organizationId')
+            .populate('schoolId');
+          
+          if (!customPackage) {
+            return res.status(404).json({ error: 'Custom package not found' });
+          }
+        } else if (packageId) {
+          package = await Package.findById(packageId);
+          if (!package) {
+            return res.status(404).json({ error: 'Package not found' });
+          }
+        } else {
+          return res.status(400).json({ error: 'Package ID or Custom Package ID required' });
         }
-      } else if (packageId) {
-        package = await Package.findById(packageId);
-        if (!package) {
-          return res.status(404).json({ error: 'Package not found' });
-        }
-      } else {
-        return res.status(400).json({ error: 'Package ID or Custom Package ID required' });
-      }
       
       // Fetch product if productId is provided
       const productId = session.metadata.productId || null;
@@ -1294,8 +1485,8 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
         product = await Product.findById(productId);
       }
 
-      // Handle both custom packages and regular packages
-      if (user && (package || customPackage)) {
+      // Handle both custom packages, regular packages, and direct product purchases
+      if (user && (package || customPackage || directProductPurchase)) {
         // For regular packages, check if user already has this package
         let shouldCreateTransaction = true;
         if (package) {
@@ -1324,7 +1515,7 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
         if (shouldCreateTransaction) {
           // Get payment amount from session
           const amount = session.amount_total ? session.amount_total / 100 : session.amount_subtotal / 100;
-          const currency = session.currency?.toUpperCase() || 'EUR';
+          const currency = session.currency?.toUpperCase() || 'USD';
 
           let transactionType = 'b2c_purchase';
           let packageType = 'standard';
@@ -1387,6 +1578,44 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             // Get organizationId or schoolId from user if they have one
             organizationId = user.organizationId || null;
             schoolId = user.schoolId || null;
+          } else if (directProductPurchase) {
+            // Handle direct product purchase (for physical products)
+            const ProductForTransaction = require('../models/Product');
+            const productForTransaction = await ProductForTransaction.findById(productId);
+            
+            if (!productForTransaction) {
+              return res.status(404).json({ error: 'Product not found' });
+            }
+            
+            // Determine transaction type based on urlType from session metadata
+            const urlType = session.metadata.urlType || null;
+            if (urlType === 'B2B') {
+              transactionType = 'b2b_contract';
+            } else if (urlType === 'B2E') {
+              transactionType = 'b2e_contract';
+            } else if (urlType === 'B2C') {
+              transactionType = 'b2c_purchase';
+            } else {
+              // Fallback: determine from user role if urlType is not available
+              if (user.role === 'b2b_user' || user.role === 'b2b_member') {
+                transactionType = 'b2b_contract';
+              } else if (user.role === 'b2e_user' || user.role === 'b2e_member') {
+                transactionType = 'b2e_contract';
+              } else {
+                transactionType = 'b2c_purchase';
+              }
+            }
+            
+            packageType = 'physical'; // Set to 'physical' for tactical card purchases
+            maxSeats = 0; // Physical products have 0 seats (no digital access)
+            
+            // For physical products, typically no expiry or 1 year
+            const expiryDate = new Date(purchaseDateForRenewal);
+            expiryDate.setFullYear(expiryDate.getFullYear() + 1); // 1 year from purchase
+            contractEndDate = setEndOfDay(expiryDate);
+            
+            organizationId = user.organizationId || null;
+            schoolId = user.schoolId || null;
           }
           
           // Also check if user is owner of school/organization
@@ -1414,21 +1643,24 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
           });
 
           // Create transaction
+          // For direct product purchases (physical), don't save packageId but save packageType as 'physical' and no uniqueCode
           transaction = await Transaction.create({
             type: transactionType,
             userId: userId,
             organizationId: organizationId || ownerOrgId || (customPackage?.organizationId?._id || customPackage?.organizationId),
             schoolId: schoolId || ownerSchoolId || (customPackage?.schoolId?._id || customPackage?.schoolId),
-            packageId: packageId || null,
-            customPackageId: customPackageId || null,
-            packageType: packageType,
+            // For direct product purchases, packageId is undefined but packageType is 'physical'
+            packageId: directProductPurchase ? undefined : (packageId || null),
+            customPackageId: directProductPurchase ? undefined : (customPackageId || null),
+            packageType: packageType || null, // Package type ('physical' for direct product purchases)
             productId: productId || null,
             amount: amount,
             currency: currency,
             status: 'paid',
             paymentProvider: 'stripe',
             stripePaymentIntentId: session.payment_intent || session.id,
-            uniqueCode: uniqueCode,
+            // For physical products, don't save uniqueCode (no digital access code needed)
+            uniqueCode: directProductPurchase ? undefined : uniqueCode,
             maxSeats: maxSeats,
             usedSeats: 0,
             codeApplications: 0,
@@ -1642,8 +1874,14 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
               organization = await OrganizationModel3.findById(transaction.organizationId);
             }
             // For custom packages, pass customPackage instead of package
-            const packageForEmail = customPackage || package;
-            await sendTransactionSuccessEmail(transaction, user, packageForEmail, organization);
+            const packageForEmail = customPackage || package || {};
+            // Fetch product if it's a physical product
+            let productForEmail = null;
+            if (transaction.packageType === 'physical' && transaction.productId) {
+              const Product = require('../models/Product');
+              productForEmail = await Product.findById(transaction.productId);
+            }
+            await sendTransactionSuccessEmail(transaction, user, packageForEmail, organization, productForEmail);
           } catch (emailError) {
             console.error('Error sending transaction success email:', emailError);
             // Don't fail the transaction if email fails

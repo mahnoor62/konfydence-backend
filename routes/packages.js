@@ -32,9 +32,32 @@ router.get('/', async (req, res) => {
       ];
     }
 
-    const packages = await Package.find(query)
+    let packages = await Package.find(query)
       .populate('includedCardIds', 'title category')
       .sort({ updatedAt: -1 });
+
+    // For B2C, only show digital and digital_physical packages (physical removed)
+    if (targetAudience === 'B2C') {
+      packages = packages.filter(pkg => {
+        const packageType = pkg.packageType || pkg.type || pkg.category || 'standard';
+        return packageType === 'digital' || packageType === 'digital_physical';
+      });
+    }
+
+    // For B2B/B2E, only show digital and digital_physical packages (physical removed)
+    if (targetAudience === 'B2B_B2E') {
+      const beforeFilterCount = packages.length;
+      packages = packages.filter(pkg => {
+        const packageType = pkg.packageType || pkg.type || pkg.category || 'standard';
+        const isValid = packageType === 'digital' || packageType === 'digital_physical';
+        if (!isValid) {
+          console.log(`B2B/B2E: Filtering out package ${pkg.name} (ID: ${pkg._id}) - packageType: ${packageType}`);
+        }
+        return isValid;
+      });
+      console.log(`B2B/B2E packages: ${beforeFilterCount} before filter, ${packages.length} after filter (digital/digital_physical only)`);
+    }
+
     res.json(packages);
   } catch (error) {
     console.error('Error fetching packages:', error);
@@ -61,9 +84,32 @@ router.get('/public', async (req, res) => {
       }
     }
 
-    const packages = await Package.find(query)
+    let packages = await Package.find(query)
       .populate('includedCardIds', 'title category')
       .sort({ createdAt: -1 });
+
+    // For B2C, only show digital and digital_physical packages (remove physical)
+    if (targetAudience === 'B2C') {
+      packages = packages.filter(pkg => {
+        const packageType = pkg.packageType || pkg.type || pkg.category || 'standard';
+        return packageType === 'digital' || packageType === 'digital_physical';
+      });
+    }
+    
+    // For B2B/B2E, only show digital and digital_physical packages (remove physical)
+    if (targetAudience === 'B2B_B2E') {
+      const beforeFilterCount = packages.length;
+      packages = packages.filter(pkg => {
+        const packageType = pkg.packageType || pkg.type || pkg.category || 'standard';
+        const isValid = packageType === 'digital' || packageType === 'digital_physical';
+        if (!isValid) {
+          console.log(`B2B/B2E (public): Filtering out package ${pkg.name} (ID: ${pkg._id}) - packageType: ${packageType}`);
+        }
+        return isValid;
+      });
+      console.log(`B2B/B2E public packages: ${beforeFilterCount} before filter, ${packages.length} after filter (digital/digital_physical only)`);
+    }
+
     res.json(packages);
   } catch (error) {
     console.error('Error fetching public packages:', error);
@@ -374,7 +420,7 @@ router.post('/:id/purchase', authenticateToken, async (req, res) => {
       packageType: packageType,
       productId: productId || null,
       amount: package.pricing.amount,
-      currency: package.pricing.currency || 'EUR',
+      currency: package.pricing.currency || 'USD',
       status: 'paid', // In production, this would be set after payment confirmation
       maxSeats: package.maxSeats || 5, // Get from package, default to 5 if not set
       usedSeats: 0,

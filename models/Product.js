@@ -13,49 +13,35 @@ function generateSlug(name) {
 
 const ProductSchema = new Schema(
   {
-    name: { type: String, required: true },
-    slug: { type: String, unique: true, sparse: true },
-    description: { type: String, required: true },
-    price: { type: Number, required: true },
-    // Use Case / Type: Leadership, OnCall, Community, Starter, Bundle
-    type: {
-      type: String,
-      enum: ['leadership', 'oncall', 'community', 'starter', 'bundle'],
-      required: true
-    },
-    // Product Category: Membership, Template, Course, Guide, Toolkit, Digital Guide
-    category: {
-      type: String,
-      enum: ['membership', 'template', 'course', 'guide', 'toolkit', 'digital-guide', 'private-users', 'schools', 'businesses'], // Keep old values for backward compatibility
-    },
-    // Target audience (B2C, B2B, B2E)
-    targetAudience: {
-      type: String,
-      enum: ['private-users', 'schools', 'businesses'],
-    },
-    isActive: { type: Boolean, default: true },
-    isFeatured: { type: Boolean, default: false },
+    // Required fields from form
     imageUrl: { type: String, required: true },
-    // Visibility: public (show on website) or private (only for selected orgs/institutes)
+    title: { type: String, required: true },
+    price: { type: Number, required: true },
+    targetAudience: [{
+      type: String,
+      enum: ['private-users', 'schools', 'businesses']
+    }],
     visibility: {
       type: String,
       enum: ['public', 'private'],
-      default: 'public'
+      default: 'public',
+      required: true
     },
-    // Allowed organizations for private products
+    
+    // Optional/backward compatibility fields (will be set to defaults if not provided)
+    name: { type: String, default: 'Product' },
+    slug: { type: String, unique: true, sparse: true },
+    description: { type: String, default: '' },
+    isActive: { type: Boolean, default: true },
+    
+    // Allowed organizations/institutes for private products (only used if visibility is private)
     allowedOrganizations: [{
       type: Schema.Types.ObjectId,
       ref: 'Organization'
     }],
-    // Allowed institutes for private products
     allowedInstitutes: [{
       type: Schema.Types.ObjectId,
       ref: 'School'
-    }],
-    // Trust Badges: GDPR-compliant, Safe checkout, Money-back guarantee
-    badges: [{
-      type: String,
-      enum: ['gdpr-compliant', 'safe-checkout', 'money-back-guarantee']
     }],
     // Level-based card arrays (for target audience-based card selection)
     level1: [{
@@ -67,11 +53,6 @@ const ProductSchema = new Schema(
       ref: 'Card'
     }],
     level3: [{
-      type: Schema.Types.ObjectId,
-      ref: 'Card'
-    }],
-    // Legacy: Attached cards for this product (kept for backward compatibility)
-    cardIds: [{
       type: Schema.Types.ObjectId,
       ref: 'Card'
     }]

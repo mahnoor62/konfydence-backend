@@ -95,7 +95,7 @@ router.post(
       
       // ALWAYS include customPricing structure with notes
       requestedModifications.customPricing = {
-        currency: requestedMods.customPricing?.currency || 'EUR',
+        currency: requestedMods.customPricing?.currency || 'USD',
         notes: customPricingNotes !== undefined ? String(customPricingNotes) : ''
       };
       
@@ -335,19 +335,19 @@ router.put(
         try {
           const CustomPackage = require('../models/CustomPackage');
           
-          // Check if CustomPackage already exists for this request
-          let customPackage = await CustomPackage.findOne({ 
-            $or: [
-              { organizationId: request.organizationId },
-              { schoolId: request.schoolId }
-            ],
-            productIds: { $in: req.body.productIds }
-          });
+          // Check if THIS SPECIFIC REQUEST already has a customPackageId
+          // This allows multiple custom packages per organization/school - one per request
+          let customPackage = null;
+          if (request.customPackageId) {
+            // This request already has a custom package linked - use it
+            customPackage = await CustomPackage.findById(request.customPackageId);
+            console.log('📦 Found existing custom package for this request:', customPackage?._id);
+          }
 
           if (!customPackage) {
             // Get pricing and seat data from request body (from admin form) or fallback to request data
             const pricingAmount = req.body.contractPricing?.amount || request.requestedModifications?.customPricing?.amount || 0;
-            const pricingCurrency = req.body.contractPricing?.currency || request.requestedModifications?.customPricing?.currency || 'EUR';
+            const pricingCurrency = req.body.contractPricing?.currency || request.requestedModifications?.customPricing?.currency || 'USD';
             const pricingBillingType = req.body.contractPricing?.billingType || request.requestedModifications?.customPricing?.billingType || 'one_time';
             const seatLimit = req.body.seatLimit || request.requestedModifications?.seatLimit || 0;
             const startDate = req.body.contract?.startDate 
@@ -357,12 +357,13 @@ router.put(
                   : new Date());
 
             // Prepare custom package data
+            // Add request ID to name to make it unique for multiple packages from same organization
             const customPackageData = {
               organizationId: request.organizationId || null,
               schoolId: request.schoolId || null,
               entityType: request.entityType || (request.organizationId ? 'organization' : 'institute'),
               productIds: req.body.productIds,
-              name: `${request.organizationName} Custom Package`,
+              name: `${request.organizationName} Custom Package${request._id ? ` (${request._id.toString().slice(-6)})` : ''}`,
               description: request.requestedModifications?.additionalNotes || '',
               contractPricing: {
                 amount: pricingAmount,
@@ -400,7 +401,13 @@ router.put(
               customPackageId: customPackage._id
             });
 
-            console.log('✅ CustomPackage created successfully:', customPackage._id);
+            console.log('✅ CustomPackage created successfully:', {
+              customPackageId: customPackage._id,
+              requestId: request._id,
+              organizationId: request.organizationId,
+              schoolId: request.schoolId,
+              productIds: customPackage.productIds
+            });
             console.log('📧 ========== EMAIL SENDING FOR CUSTOM PACKAGE CREATION ==========');
             
             // Send custom package creation email immediately after creation

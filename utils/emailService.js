@@ -341,7 +341,7 @@ const createCustomPackageEmailTemplate = (request, customPackage) => {
                   <tr>
                     <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Amount:</strong></td>
                     <td style="padding: 8px 0; color: ${colors.primary}; font-size: 18px; font-weight: 700;">
-                      ${(customPackage.contractPricing?.currency || 'EUR') === 'EUR' ? '€' : (customPackage.contractPricing?.currency || 'EUR')}${customPackage.contractPricing?.amount || 0}
+                      $${customPackage.contractPricing?.amount || 0}
                     </td>
                   </tr>
                   <tr>
@@ -472,7 +472,7 @@ Package Details:
 - Contract Status: ${customPackage.contract?.status || 'Active'}
 
 Pricing Information:
-- Amount: ${(customPackage.contractPricing?.currency || 'EUR') === 'EUR' ? '€' : (customPackage.contractPricing?.currency || 'EUR')}${customPackage.contractPricing?.amount || 0}
+- Amount: $${customPackage.contractPricing?.amount || 0}
 - Billing Type: ${customPackage.contractPricing?.billingType || 'N/A'}
 
 Your custom package is now active and ready to use. Please visit your organization dashboard to view and manage your package.
@@ -596,7 +596,7 @@ const calculateExpiryInfo = (endDate) => {
   }
 };
 
-const createTransactionSuccessEmailTemplate = (transaction, user, package, organization = null) => {
+const createTransactionSuccessEmailTemplate = (transaction, user, package, organization = null, product = null) => {
   const formatDate = (date) => {
     if (!date) return 'N/A';
     return new Date(date).toLocaleDateString('en-US', { 
@@ -610,8 +610,9 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
   const organizationName = organization?.name || (isOrganizationTransaction ? 'Your Organization' : null);
   const organizationType = organization?.type ? getOrganizationTypeLabel(organization.type) : null;
   
-  // Get package type (prefer packageType, fallback to type, then category)
-  const packageType = transaction.packageType || package.packageType || package.type || package.category || 'standard';
+  // Get package type (prefer transaction.packageType, fallback to package fields if package exists)
+  // Handle case where package might be null/empty for physical products
+  const packageType = transaction.packageType || (package ? (package.packageType || package.type || package.category) : null) || 'standard';
   const packageTypeLabel = getPackageTypeLabel(packageType);
   
   // Calculate expiry information
@@ -623,7 +624,7 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Payment Successful - Your Unique Code</title>
+  <title>${packageType === 'physical' ? 'Payment Successful - Physical Card Game Kit' : 'Payment Successful - Your Unique Code'}</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: ${colors.background};">
   <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: ${colors.background}; padding: 20px;">
@@ -648,10 +649,11 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
               </p>
               
               <p style="margin: 0 0 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">
-                Thank you for your purchase! Your payment has been successfully processed.
+                ${packageType === 'physical' ? 'Thank you for purchasing the Tactical Card Game Kit! Your payment has been successfully processed. Your physical cards will be shipped to you soon.' : 'Thank you for your purchase! Your payment has been successfully processed.'}
               </p>
 
-              <!-- Note Section -->
+              ${packageType !== 'physical' && transaction.uniqueCode ? `
+              <!-- Note Section - Only for non-physical packages -->
               <div style="background-color: ${colors.background}; padding: 20px; border-radius: 6px; margin: 20px 0;">
                 <h3 style="margin: 0 0 10px 0; color: ${colors.primary}; font-size: 16px; font-weight: 600;">Note</h3>
                 <p style="margin: 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
@@ -659,7 +661,7 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
                 </p>
               </div>
               
-              <!-- Unique Code Badge -->
+              <!-- Unique Code Badge - Only for non-physical packages -->
               <table role="presentation" style="width: 100%; margin: 30px 0; border-collapse: collapse;">
                 <tr>
                   <td style="background: linear-gradient(135deg, ${colors.secondary} 0%, ${colors.primary} 100%); color: ${colors.white}; padding: 20px; border-radius: 8px; text-align: center;">
@@ -668,19 +670,50 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
                   </td>
                 </tr>
               </table>
+              ` : ''}
               
-              <!-- Package Details -->
+              ${packageType === 'physical' && product ? `
+              <!-- Product Details - Only for physical products -->
+              <div style="background-color: ${colors.background}; padding: 20px; border-radius: 6px; margin: 20px 0;">
+                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">Product Details</h3>
+                <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Product Name:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${product.title || product.name || 'Physical Card Game Kit'}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Product Type:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">
+                      <span style="background-color: #FF6B6B; color: white; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; text-transform: uppercase;">
+                        Physical
+                      </span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Amount Paid:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.primary}; font-size: 16px; font-weight: 700;">
+                      $${transaction.amount || 0}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Purchase Date:</strong></td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${formatDate(transaction.createdAt || transaction.contractPeriod?.startDate)}</td>
+                  </tr>
+                </table>
+              </div>
+              ` : packageType !== 'physical' ? `
+              <!-- Package Details - Only for non-physical packages -->
               <div style="background-color: ${colors.background}; padding: 20px; border-radius: 6px; margin: 20px 0;">
                 <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">Package Details</h3>
                 <table role="presentation" style="width: 100%; border-collapse: collapse;">
                   <tr>
                     <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Package Name:</strong></td>
-                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${package.name || 'N/A'}</td>
+                    <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">${package?.name || 'N/A'}</td>
                   </tr>
                   <tr>
                     <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Package Type:</strong></td>
                     <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;">
-                      <span style="background-color: ${packageType === 'physical' ? '#FF6B6B' : packageType === 'digital' ? '#4ECDC4' : '#95E1D3'}; color: white; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; text-transform: uppercase;">
+                      <span style="background-color: ${packageType === 'digital' ? '#4ECDC4' : '#95E1D3'}; color: white; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; text-transform: uppercase;">
                         ${packageTypeLabel}
                       </span>
                     </td>
@@ -692,7 +725,7 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
                   <tr>
                     <td style="padding: 8px 0; color: ${colors.text}; font-size: 14px;"><strong>Amount Paid:</strong></td>
                     <td style="padding: 8px 0; color: ${colors.primary}; font-size: 16px; font-weight: 700;">
-                      ${((transaction.currency || 'EUR') === 'EUR' ? '€' : (transaction.currency || 'EUR'))}${transaction.amount || 0}
+                      $${transaction.amount || 0}
                     </td>
                   </tr>
                   <tr>
@@ -713,9 +746,10 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
                   ` : ''}
                 </table>
               </div>
+              ` : ''}
 
-              ${expiryInfo ? `
-              <!-- Expiry Information -->
+              ${expiryInfo && packageType !== 'physical' ? `
+              <!-- Expiry Information - Only for non-physical packages -->
               <div style="background-color: ${expiryInfo.status === 'expired' ? '#FFE5E5' : expiryInfo.status === 'soon' || expiryInfo.status === 'today' ? '#FFF4E5' : '#E5F5F0'}; border-left: 4px solid ${expiryInfo.status === 'expired' ? '#FF6B6B' : expiryInfo.status === 'soon' || expiryInfo.status === 'today' ? '#FFA500' : '#4ECDC4'}; padding: 20px; margin: 20px 0; border-radius: 4px;">
                 <h3 style="margin: 0 0 10px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">Package Expiry Information</h3>
                 <p style="margin: 0 0 10px 0; color: ${colors.text}; font-size: 16px; font-weight: 600;">
@@ -726,11 +760,7 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
                   <strong>Expiry Date:</strong> ${formatDate(transaction.contractPeriod.endDate)}
                 </p>
                 ` : ''}
-                ${packageType === 'physical' ? `
-                <p style="margin: 10px 0 0 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
-                  <strong>Note:</strong> This is a physical package. You will receive physical cards for offline game play.
-                </p>
-                ` : packageType === 'digital' ? `
+                ${packageType === 'digital' ? `
                 <p style="margin: 10px 0 0 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
                   <strong>Note:</strong> This is a digital package. You can play the game online using your unique code.
                 </p>
@@ -742,7 +772,8 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
               </div>
               ` : ''}
               
-              <!-- Instructions -->
+              ${packageType !== 'physical' && transaction.uniqueCode ? `
+              <!-- Instructions - Only for non-physical packages -->
               <div style="background-color: #FFF9E6; border-left: 4px solid ${colors.accent}; padding: 20px; margin: 20px 0; border-radius: 4px;">
                 <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">How to Use Your Code</h3>
                 <ol style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
@@ -752,23 +783,41 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
                   <li>Each seat can be used once to play the game</li>
                 </ol>
               </div>
+              ` : packageType === 'physical' ? `
+              <!-- Physical Product Instructions -->
+              <div style="background-color: #E5F5F0; border-left: 4px solid ${colors.secondary}; padding: 20px; margin: 20px 0; border-radius: 4px;">
+                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">What Happens Next?</h3>
+                <ol style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
+                  <li style="margin-bottom: 10px;">Your physical card game kit will be shipped to your registered address</li>
+                  <li style="margin-bottom: 10px;">You will receive shipping confirmation via email once your order is dispatched</li>
+                  <li style="margin-bottom: 10px;">Once you receive your physical cards, you can start playing offline with your family</li>
+                  <li>No digital access code is needed for physical products - the game is played with physical cards</li>
+                </ol>
+              </div>
+              ` : ''}
               
               <!-- Important Notes -->
               <div style="margin: 30px 0;">
                 <p style="margin: 0 0 10px 0; color: ${colors.text}; font-size: 14px; font-weight: 600;">Important Notes:</p>
                 <ul style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                  ${packageType !== 'physical' && transaction.uniqueCode ? `
                   <li style="margin-bottom: 8px;">Keep this code safe and secure</li>
+                  ` : ''}
                   <li style="margin-bottom: 8px;">Package Type: <strong>${packageTypeLabel}</strong></li>
+                  ${packageType === 'physical' ? `
+                  <li style="margin-bottom: 8px;">Your physical card game kit purchase has been confirmed</li>
+                  <li style="margin-bottom: 8px;">Physical cards will be shipped to your registered address</li>
+                  <li style="margin-bottom: 8px;">No digital access code is required - this is a physical product only</li>
+                  ` : `
                   <li style="margin-bottom: 8px;">You have ${transaction.maxSeats || 5} seat${(transaction.maxSeats || 5) > 1 ? 's' : ''} available for game play</li>
                   <li style="margin-bottom: 8px;">Each seat can only be used once</li>
-                  ${expiryInfo ? `
+                  `}
+                  ${packageType !== 'physical' && expiryInfo ? `
                   <li style="margin-bottom: 8px;">Package Expiry: <strong>${expiryInfo.message}</strong>${transaction.contractPeriod?.endDate ? ` (${formatDate(transaction.contractPeriod.endDate)})` : ''}</li>
-                  ` : transaction.contractPeriod?.endDate ? `
+                  ` : packageType !== 'physical' && transaction.contractPeriod?.endDate ? `
                   <li style="margin-bottom: 8px;">Your code is valid until ${formatDate(transaction.contractPeriod.endDate)}</li>
                   ` : ''}
-                  ${packageType === 'physical' ? `
-                  <li style="margin-bottom: 8px;">Physical cards will be delivered separately. Online game play is not available for physical packages.</li>
-                  ` : packageType === 'digital_physical' ? `
+                  ${packageType === 'digital_physical' ? `
                   <li style="margin-bottom: 8px;">You can play online immediately. Physical cards will be delivered separately.</li>
                   ` : ''}
                 </ul>
@@ -807,7 +856,7 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
   `;
 };
 
-const sendTransactionSuccessEmail = async (transaction, user, package, organization = null) => {
+const sendTransactionSuccessEmail = async (transaction, user, package, organization = null, product = null) => {
   try {
     // Check if email service is configured
     if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
@@ -834,47 +883,72 @@ const sendTransactionSuccessEmail = async (transaction, user, package, organizat
     const expiryInfo = transaction.contractPeriod?.endDate ? calculateExpiryInfo(transaction.contractPeriod.endDate) : null;
 
     const transporter = createTransporter();
-    const emailHtml = createTransactionSuccessEmailTemplate(transaction, user, package, organization);
+    const emailHtml = createTransactionSuccessEmailTemplate(transaction, user, package, organization, product);
 
     const isOrganizationTransaction = transaction.type === 'b2b_contract' || transaction.type === 'b2e_contract';
     const organizationName = organization?.name || (isOrganizationTransaction ? 'Your Organization' : null);
     const organizationType = organization?.type;
 
     // Create text version for email clients that don't support HTML
+    const isPhysical = packageType === 'physical';
     const textVersion = `Dear ${user.name || 'Valued Customer'},
 
-Thank you for your purchase! Your payment has been successfully processed.
+${isPhysical ? 'Thank you for purchasing the Tactical Card Game Kit! Your payment has been successfully processed. Your physical cards will be shipped to you soon.' : 'Thank you for your purchase! Your payment has been successfully processed.'}
 
+${!isPhysical && transaction.uniqueCode ? `
 Note:
 This unique code is for you. You can use this code to play the game.
 
 Your Unique Code: ${transaction.uniqueCode}
+` : ''}
 
+${isPhysical && product ? `
+Product Details:
+- Product Name: ${product.title || product.name || 'Physical Card Game Kit'}
+- Product Type: Physical
+- Amount Paid: $${transaction.amount || 0}
+- Purchase Date: ${new Date(transaction.createdAt || transaction.contractPeriod?.startDate).toLocaleDateString()}
+` : !isPhysical ? `
 Package Details:
-- Package Name: ${package?.name || 'N/A'
-
-}image.png
+- Package Name: ${package?.name || 'N/A'}
 - Package Type: ${packageTypeLabel}
 - Transaction Type: ${getTransactionTypeLabel(transaction.type)}
-- Amount Paid: ${transaction.currency || 'EUR'}${transaction.amount || 0}
+- Amount Paid: $${transaction.amount || 0}
 - Max Seats: ${transaction.maxSeats || 5} seat${(transaction.maxSeats || 5) > 1 ? 's' : ''}
 ${transaction.contractPeriod?.startDate ? `- Contract Start Date: ${new Date(transaction.contractPeriod.startDate).toLocaleDateString()}` : ''}
 ${transaction.contractPeriod?.endDate ? `- Contract End Date: ${new Date(transaction.contractPeriod.endDate).toLocaleDateString()}` : ''}
 ${expiryInfo ? `- Package Expiry: ${expiryInfo.message}` : ''}
+` : ''}
 
+${isPhysical ? `
+What Happens Next:
+1. Your physical card game kit will be shipped to your registered address
+2. You will receive shipping confirmation via email once your order is dispatched
+3. Once you receive your physical cards, you can start playing offline with your family
+4. No digital access code is needed for physical products - the game is played with physical cards
+` : transaction.uniqueCode ? `
 How to Use Your Code:
 1. Visit the game page on Konfydence website
 2. Enter your unique code: ${transaction.uniqueCode}
 3. Start playing the game with your ${transaction.maxSeats || 5} seat${(transaction.maxSeats || 5) > 1 ? 's' : ''}
 4. Each seat can be used once to play the game
+` : ''}
 
+${isPhysical ? `
+Important Notes:
+- Package Type: Physical
+- Your physical card game kit purchase has been confirmed
+- Physical cards will be shipped to your registered address
+- No digital access code is required - this is a physical product only
+` : `
 Important Notes:
 - Keep this code safe and secure
 - Package Type: ${packageTypeLabel}
 - You have ${transaction.maxSeats || 5} seat${(transaction.maxSeats || 5) > 1 ? 's' : ''} available for game play
 - Each seat can only be used once
 ${expiryInfo ? `- Package Expiry: ${expiryInfo.message}${transaction.contractPeriod?.endDate ? ` (${new Date(transaction.contractPeriod.endDate).toLocaleDateString()})` : ''}` : transaction.contractPeriod?.endDate ? `- Your code is valid until ${new Date(transaction.contractPeriod.endDate).toLocaleDateString()}` : ''}
-${packageType === 'physical' ? `- Physical cards will be delivered separately. Online game play is not available for physical packages.` : packageType === 'digital_physical' ? `- You can play online immediately. Physical cards will be delivered separately.` : ''}
+${packageType === 'digital_physical' ? `- You can play online immediately. Physical cards will be delivered separately.` : ''}
+`}
 
 If you have any questions or need assistance, please don't hesitate to contact us.
 
@@ -884,7 +958,9 @@ The Konfydence Team`;
     const mailOptions = {
       from: `"Konfydence" <${process.env.SMTP_USER}>`,
       to: user.email,
-      subject: `Payment Successful - Your Unique Code: ${transaction.uniqueCode}`,
+      subject: packageType === 'physical' 
+        ? `Payment Successful - ${product?.title || product?.name || 'Your Physical Card Game Kit Order'}` 
+        : `Payment Successful - Your Unique Code: ${transaction.uniqueCode || 'N/A'}`,
       html: emailHtml,
       text: textVersion,
       // Add headers similar to verification emails
@@ -899,7 +975,7 @@ The Konfydence Team`;
       to: user.email,
       from: process.env.SMTP_USER,
       uniqueCode: transaction.uniqueCode,
-      packageName: package.name,
+      packageName: package?.name || (transaction.packageType === 'physical' ? 'Physical Card Game Kit' : 'N/A'),
       smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com'
     });
 

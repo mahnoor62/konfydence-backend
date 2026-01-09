@@ -2,152 +2,113 @@ const mongoose = require('mongoose');
 require('dotenv').config();
 const Package = require('../models/Package');
 
-// Predefined packages data
+// Predefined packages data - 4 packages total
 const predefinedPackages = [
-  // B2C Packages
+  // B2C Packages (2 packages)
   {
     name: 'Digital Package',
-    description: 'Access to digital cards and content',
+    description: 'Access to all digital cards and content. Unlimited digital access to online platform with regular content updates.',
     type: 'digital',
     packageType: 'digital',
     category: 'digital',
     pricing: {
       amount: 29,
-      currency: 'EUR',
-      billingType: 'subscription'
-    },
-    targetAudiences: ['B2C'],
-    visibility: 'public',
-    status: 'active',
-    isPredefined: true,
-    maxSeats: 2
-  },
-  {
-    name: 'Physical Cards',
-    description: 'Physical cards package',
-    type: 'physical',
-    packageType: 'physical',
-    category: 'physical',
-    pricing: {
-      amount: 49,
-      currency: 'EUR',
+      currency: 'USD',
       billingType: 'one_time'
     },
     targetAudiences: ['B2C'],
     visibility: 'public',
     status: 'active',
     isPredefined: true,
-    maxSeats: 3
+    maxSeats: 1, // B2C default: 1
+    expiryTime: 1,
+    expiryTimeUnit: 'years'
   },
   {
-    name: 'Digital & Physical Cards',
-    description: 'Combined digital and physical cards package',
+    name: 'Digital + Physical Cards',
+    description: 'Everything in Digital Package plus physical card deck. Includes unique reference code included. Best value package with complete access.',
     type: 'digital_physical',
     packageType: 'digital_physical',
     category: 'digital_physical',
     pricing: {
       amount: 69,
-      currency: 'EUR',
+      currency: 'USD',
       billingType: 'one_time'
     },
     targetAudiences: ['B2C'],
     visibility: 'public',
     status: 'active',
     isPredefined: true,
-    maxSeats: 4
+    maxSeats: 1, // B2C default: 1
+    expiryTime: 1,
+    expiryTimeUnit: 'years'
   },
+  // B2B/B2E Packages (2 packages)
   {
-    name: 'Digital Renewal',
-    description: 'Yearly digital renewal package',
-    type: 'renewal',
-    packageType: 'renewal',
-    category: 'renewal',
+    name: 'Digital Package',
+    description: 'Digital package for organizations. Online access with unique codes for team members.',
+    type: 'digital',
+    packageType: 'digital',
+    category: 'digital',
     pricing: {
-      amount: 2499,
-      currency: 'EUR',
+      amount: 29,
+      currency: 'USD',
       billingType: 'one_time'
     },
-    targetAudiences: ['B2C'],
+    targetAudiences: ['B2B', 'B2E'], // Both B2B and B2E
     visibility: 'public',
     status: 'active',
     isPredefined: true,
-    maxSeats: 5
+    maxSeats: 5, // B2B/B2E default: 5
+    expiryTime: 1,
+    expiryTimeUnit: 'years'
   },
-  // B2B/B2E Packages
   {
-    name: 'Eductional Institutes Name *',
-    description: 'Package for educational institutes',
-    type: 'standard',
-    packageType: 'standard',
-    category: 'standard',
+    name: 'Digital + Physical Cards',
+    description: 'Complete bundle: digital access + physical card game kit. Best value for organizations who want both online and offline play.',
+    type: 'digital_physical',
+    packageType: 'digital_physical',
+    category: 'digital_physical',
     pricing: {
-      amount: 22,
-      currency: 'EUR',
+      amount: 69,
+      currency: 'USD',
       billingType: 'one_time'
     },
-    targetAudiences: ['B2E'],
+    targetAudiences: ['B2B', 'B2E'], // Both B2B and B2E
     visibility: 'public',
     status: 'active',
     isPredefined: true,
-    maxSeats: 5
-  },
-  {
-    name: 'Private Users',
-    description: 'Package for private users',
-    type: 'standard',
-    packageType: 'standard',
-    category: 'standard',
-    pricing: {
-      amount: 89,
-      currency: 'EUR',
-      billingType: 'one_time'
-    },
-    targetAudiences: ['B2C'],
-    visibility: 'public',
-    status: 'active',
-    isPredefined: true,
-    maxSeats: 5
+    maxSeats: 5, // B2B/B2E default: 5
+    expiryTime: 1,
+    expiryTimeUnit: 'years'
   }
 ];
 
 async function seedPredefinedPackages() {
   try {
     // Connect to MongoDB
-    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/konfydence', {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
+    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/konfydence');
     console.log('✅ Connected to MongoDB');
 
-    // Check if predefined packages already exist
-    const existingPredefined = await Package.find({ isPredefined: true });
-    if (existingPredefined.length > 0) {
-      console.log(`⚠️  Found ${existingPredefined.length} existing predefined packages. Updating them...`);
-      
-      // Update existing packages to be predefined
-      for (const pkg of predefinedPackages) {
-        await Package.findOneAndUpdate(
-          { name: pkg.name, targetAudiences: pkg.targetAudiences },
-          { ...pkg, isPredefined: true },
-          { upsert: true, new: true }
-        );
-      }
-      console.log('✅ Updated existing packages to predefined');
-    } else {
-      // Insert predefined packages
-      const result = await Package.insertMany(predefinedPackages);
-      console.log(`✅ Created ${result.length} predefined packages`);
-    }
+    // Delete existing predefined packages to start fresh
+    const deleteResult = await Package.deleteMany({ isPredefined: true });
+    console.log(`🗑️  Deleted ${deleteResult.deletedCount} existing predefined packages`);
 
-    // Mark all existing packages as predefined if they match the names
-    for (const pkg of predefinedPackages) {
-      await Package.updateMany(
-        { name: pkg.name },
-        { $set: { isPredefined: true } }
-      );
-    }
+    // Insert new predefined packages
+    const result = await Package.insertMany(predefinedPackages);
+    console.log(`✅ Created ${result.length} predefined packages:`);
+    
+    result.forEach((pkg, index) => {
+      const audience = pkg.targetAudiences.join('/');
+      console.log(`   ${index + 1}. ${pkg.name} (${audience}) - ${pkg.packageType} - ${pkg.maxSeats} seats - ${pkg.expiryTime} ${pkg.expiryTimeUnit}`);
+    });
 
-    console.log('✅ Predefined packages seeded successfully!');
+    console.log('\n✅ Predefined packages seeded successfully!');
+    console.log('\n📦 Package Summary:');
+    console.log('   B2C Packages: 2 (Digital, Digital + Physical)');
+    console.log('   B2B/B2E Packages: 2 (Digital, Digital + Physical)');
+    console.log('   All packages: 1 year expiry, predefined, active');
+    
     process.exit(0);
   } catch (error) {
     console.error('❌ Error seeding predefined packages:', error);
@@ -156,4 +117,3 @@ async function seedPredefinedPackages() {
 }
 
 seedPredefinedPackages();
-

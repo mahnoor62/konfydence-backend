@@ -38,7 +38,7 @@ const PackageSchema = new Schema(
       },
       currency: {
         type: String,
-        default: 'EUR',
+        default: 'USD',
         uppercase: true
       },
       billingType: {
@@ -70,7 +70,7 @@ const PackageSchema = new Schema(
     maxSeats: {
       type: Number,
       default: 0,
-      min: 1
+      min: 0  // Allow 0 for physical packages
     },
     expiryTime: {
       type: Number,

@@ -62,7 +62,7 @@ const CustomPackageRequestSchema = new Schema(
         amount: Number,
         currency: {
           type: String,
-          default: 'EUR',
+          default: 'USD',
           uppercase: true
         },
         billingType: {

@@ -23,12 +23,11 @@ router.get('/', optionalAuth, async (req, res) => {
     // Otherwise, default to showing only active products
     const query = includeInactive ? {} : { isActive: true };
 
-    if (req.query.type) {
-      query.type = req.query.type;
-    }
-
-    if (req.query.category) {
-      query.category = req.query.category;
+    // Filter by targetAudience (can be array or single value)
+    if (req.query.targetAudience) {
+      // targetAudience is stored as an array in the database
+      // So we need to check if the array contains the requested value
+      query.targetAudience = { $in: Array.isArray(req.query.targetAudience) ? req.query.targetAudience : [req.query.targetAudience] };
     }
 
     // Filter by visibility: public products OR private products where user's org/institute is allowed
@@ -61,6 +60,9 @@ router.get('/', optionalAuth, async (req, res) => {
         Product.find(query)
           .populate('allowedOrganizations', 'name')
           .populate('allowedInstitutes', 'name')
+          .populate('level1', 'title category targetAudiences tags')
+          .populate('level2', 'title category targetAudiences tags')
+          .populate('level3', 'title category targetAudiences tags')
           .sort({ createdAt: -1 })
           .skip((page - 1) * limit)
           .limit(limit),
@@ -79,12 +81,11 @@ router.get('/', optionalAuth, async (req, res) => {
     }
 
     const products = await Product.find(query)
-      .populate('cardIds', 'title category levels referenceCode')
+      .populate('allowedOrganizations', 'name')
+      .populate('allowedInstitutes', 'name')
       .populate('level1', 'title category targetAudiences tags')
       .populate('level2', 'title category targetAudiences tags')
       .populate('level3', 'title category targetAudiences tags')
-      .populate('allowedOrganizations', 'name')
-      .populate('allowedInstitutes', 'name')
       .sort({ createdAt: -1 });
     res.json(products);
   } catch (error) {
@@ -95,12 +96,11 @@ router.get('/', optionalAuth, async (req, res) => {
 
 router.get('/featured/homepage', optionalAuth, async (req, res) => {
   try {
-    // Only show public featured products on homepage
+    // Only show public active products on homepage
     const featuredProducts = await Product.find({ 
-      isFeatured: true,
       isActive: true,
       visibility: 'public',
-      category: { $in: ['private-users', 'schools', 'businesses'] }
+      targetAudience: { $in: ['private-users', 'schools', 'businesses'] }
     }).sort({ createdAt: -1 }).limit(6);
 
     res.json(featuredProducts);
@@ -138,12 +138,11 @@ router.get('/slug/:slug', optionalAuth, async (req, res) => {
     }
     
     const product = await Product.findOne(query)
-      .populate('cardIds', 'title category levels referenceCode')
+      .populate('allowedOrganizations', 'name')
+      .populate('allowedInstitutes', 'name')
       .populate('level1', 'title category targetAudiences tags')
       .populate('level2', 'title category targetAudiences tags')
-      .populate('level3', 'title category targetAudiences tags')
-      .populate('allowedOrganizations', 'name')
-      .populate('allowedInstitutes', 'name');
+      .populate('level3', 'title category targetAudiences tags');
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
@@ -157,7 +156,8 @@ router.get('/slug/:slug', optionalAuth, async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const product = await Product.findById(req.params.id)
-      .populate('cardIds', 'title category levels referenceCode')
+      .populate('allowedOrganizations', 'name')
+      .populate('allowedInstitutes', 'name')
       .populate('level1', 'title category targetAudiences tags')
       .populate('level2', 'title category targetAudiences tags')
       .populate('level3', 'title category targetAudiences tags');
@@ -184,10 +184,12 @@ router.post(
   '/',
   authenticateToken,
   [
-    body('name').notEmpty().withMessage('Product name is required'),
-    body('description').notEmpty().withMessage('Product description is required'),
+    body('imageUrl').notEmpty().withMessage('Product image is required'),
+    body('title').notEmpty().withMessage('Product title is required'),
     body('price').isNumeric().withMessage('Product price must be a valid number'),
-    body('imageUrl').notEmpty().withMessage('Product image is required')
+    body('targetAudience').isArray().withMessage('Target audience must be an array'),
+    body('targetAudience.*').optional().isIn(['private-users', 'schools', 'businesses']).withMessage('Each target audience must be one of: private-users, schools, businesses'),
+    body('visibility').optional().isIn(['public', 'private']).withMessage('Visibility must be either public or private')
   ],
   async (req, res) => {
     try {
@@ -197,12 +199,21 @@ router.post(
         return res.status(400).json({ error: errorMessages, errors: errors.array() });
       }
 
-      if (!req.body.type) {
-        return res.status(400).json({ error: 'Product type is required' });
-      }
+      // Only accept fields from the form
+      const productData = {
+        imageUrl: req.body.imageUrl,
+        title: req.body.title,
+        price: parseFloat(req.body.price),
+        targetAudience: Array.isArray(req.body.targetAudience) ? req.body.targetAudience : [req.body.targetAudience].filter(Boolean),
+        visibility: req.body.visibility || 'public',
+        // Set defaults for backward compatibility
+        name: req.body.name || 'Product',
+        description: req.body.description || '',
+        isActive: req.body.isActive !== undefined ? req.body.isActive : true,
+      };
 
       // Generate slug from name
-      let baseSlug = generateSlug(req.body.name);
+      let baseSlug = generateSlug(productData.name);
       let slug = baseSlug;
       let counter = 1;
       
@@ -211,27 +222,37 @@ router.post(
         slug = `${baseSlug}-${counter}`;
         counter++;
       }
+      productData.slug = slug;
 
-      // Ensure targetAudience is saved if provided
-      const productData = { 
-        ...req.body,
-        slug: slug,
-        // Remove sortOrder if present
-        sortOrder: undefined
-      };
-      
-      if (productData.targetAudience) {
-        // Validate targetAudience value
-        const validTargetAudiences = ['private-users', 'schools', 'businesses'];
-        if (!validTargetAudiences.includes(productData.targetAudience)) {
-          return res.status(400).json({ error: 'Invalid targetAudience. Must be one of: private-users, schools, businesses' });
+      // Only set allowedOrganizations and allowedInstitutes if visibility is private
+      if (productData.visibility === 'private') {
+        if (Array.isArray(req.body.allowedOrganizations)) {
+          productData.allowedOrganizations = req.body.allowedOrganizations;
         }
+        if (Array.isArray(req.body.allowedInstitutes)) {
+          productData.allowedInstitutes = req.body.allowedInstitutes;
+        }
+      } else {
+        productData.allowedOrganizations = [];
+        productData.allowedInstitutes = [];
       }
 
-      // Ensure level arrays are arrays
-      if (!Array.isArray(productData.level1)) productData.level1 = [];
-      if (!Array.isArray(productData.level2)) productData.level2 = [];
-      if (!Array.isArray(productData.level3)) productData.level3 = [];
+      // Handle level-based card arrays
+      if (Array.isArray(req.body.level1)) {
+        productData.level1 = req.body.level1;
+      } else {
+        productData.level1 = [];
+      }
+      if (Array.isArray(req.body.level2)) {
+        productData.level2 = req.body.level2;
+      } else {
+        productData.level2 = [];
+      }
+      if (Array.isArray(req.body.level3)) {
+        productData.level3 = req.body.level3;
+      } else {
+        productData.level3 = [];
+      }
 
       const product = await Product.create(productData);
       res.status(201).json(product);
@@ -253,10 +274,12 @@ router.put(
   '/:id',
   authenticateToken,
   [
-    body('name').optional().notEmpty().withMessage('Product name cannot be empty'),
-    body('description').optional().notEmpty().withMessage('Product description cannot be empty'),
+    body('imageUrl').optional().notEmpty().withMessage('Product image URL cannot be empty'),
+    body('title').optional().notEmpty().withMessage('Product title cannot be empty'),
     body('price').optional().isNumeric().withMessage('Product price must be a valid number'),
-    body('imageUrl').optional().notEmpty().withMessage('Product image URL cannot be empty')
+    body('targetAudience').optional().isArray().withMessage('Target audience must be an array'),
+    body('targetAudience.*').optional().isIn(['private-users', 'schools', 'businesses']).withMessage('Each target audience must be one of: private-users, schools, businesses'),
+    body('visibility').optional().isIn(['public', 'private']).withMessage('Visibility must be either public or private')
   ],
   async (req, res) => {
     try {
@@ -266,17 +289,30 @@ router.put(
         return res.status(400).json({ error: errorMessages, errors: errors.array() });
       }
 
-      // Get existing product to check if name changed
+      // Get existing product
       const existingProduct = await Product.findById(req.params.id);
       if (!existingProduct) {
         return res.status(404).json({ error: 'Product not found' });
       }
 
-      // Ensure targetAudience is saved if provided
-      const updateData = { ...req.body };
+      // Only update fields that are in the form
+      const updateData = {};
       
-      // Remove sortOrder if present
-      delete updateData.sortOrder;
+      // Only accept fields from the form
+      if (req.body.imageUrl !== undefined) updateData.imageUrl = req.body.imageUrl;
+      if (req.body.title !== undefined) updateData.title = req.body.title;
+      if (req.body.price !== undefined) updateData.price = parseFloat(req.body.price);
+      if (req.body.targetAudience !== undefined) {
+        updateData.targetAudience = Array.isArray(req.body.targetAudience) ? req.body.targetAudience : [req.body.targetAudience].filter(Boolean);
+      }
+      if (req.body.visibility !== undefined) {
+        updateData.visibility = req.body.visibility;
+      }
+      
+      // Handle backward compatibility fields (keep existing values if not provided)
+      if (req.body.name !== undefined) updateData.name = req.body.name;
+      if (req.body.description !== undefined) updateData.description = req.body.description;
+      if (req.body.isActive !== undefined) updateData.isActive = req.body.isActive;
       
       // Generate slug if name changed
       if (updateData.name && updateData.name !== existingProduct.name) {
@@ -292,34 +328,28 @@ router.put(
         updateData.slug = slug;
       }
       
-      if (updateData.targetAudience) {
-        // Validate targetAudience value
-        const validTargetAudiences = ['private-users', 'schools', 'businesses'];
-        if (!validTargetAudiences.includes(updateData.targetAudience)) {
-          return res.status(400).json({ error: 'Invalid targetAudience. Must be one of: private-users, schools, businesses' });
+      // Handle allowedOrganizations and allowedInstitutes based on visibility
+      if (updateData.visibility === 'public' || (updateData.visibility === undefined && existingProduct.visibility === 'public')) {
+        updateData.allowedOrganizations = [];
+        updateData.allowedInstitutes = [];
+      } else if (updateData.visibility === 'private' || existingProduct.visibility === 'private') {
+        if (req.body.allowedOrganizations !== undefined) {
+          updateData.allowedOrganizations = Array.isArray(req.body.allowedOrganizations) ? req.body.allowedOrganizations : [];
+        }
+        if (req.body.allowedInstitutes !== undefined) {
+          updateData.allowedInstitutes = Array.isArray(req.body.allowedInstitutes) ? req.body.allowedInstitutes : [];
         }
       }
 
-      // Ensure level arrays are arrays
-      if (updateData.level1 !== undefined && !Array.isArray(updateData.level1)) updateData.level1 = [];
-      if (updateData.level2 !== undefined && !Array.isArray(updateData.level2)) updateData.level2 = [];
-      if (updateData.level3 !== undefined && !Array.isArray(updateData.level3)) updateData.level3 = [];
-      
-      // Ensure visibility defaults to public if not provided
-      if (!updateData.visibility) updateData.visibility = 'public';
-      
-      // Clear allowed arrays if visibility is public
-      if (updateData.visibility === 'public') {
-        updateData.allowedOrganizations = [];
-        updateData.allowedInstitutes = [];
-      } else {
-        // Ensure allowed arrays are arrays
-        if (updateData.allowedOrganizations !== undefined && !Array.isArray(updateData.allowedOrganizations)) {
-          updateData.allowedOrganizations = [];
-        }
-        if (updateData.allowedInstitutes !== undefined && !Array.isArray(updateData.allowedInstitutes)) {
-          updateData.allowedInstitutes = [];
-        }
+      // Handle level-based card arrays
+      if (req.body.level1 !== undefined) {
+        updateData.level1 = Array.isArray(req.body.level1) ? req.body.level1 : [];
+      }
+      if (req.body.level2 !== undefined) {
+        updateData.level2 = Array.isArray(req.body.level2) ? req.body.level2 : [];
+      }
+      if (req.body.level3 !== undefined) {
+        updateData.level3 = Array.isArray(req.body.level3) ? req.body.level3 : [];
       }
 
       const product = await Product.findByIdAndUpdate(

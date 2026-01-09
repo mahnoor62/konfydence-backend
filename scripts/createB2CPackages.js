@@ -12,7 +12,7 @@ const B2C_PACKAGES = [
     category: 'digital',
     pricing: {
       amount: 29,
-      currency: 'EUR',
+      currency: 'USD',
       billingType: 'subscription'
     },
     targetAudiences: ['B2C'],
@@ -29,7 +29,7 @@ const B2C_PACKAGES = [
     category: 'physical',
     pricing: {
       amount: 49,
-      currency: 'EUR',
+      currency: 'USD',
       billingType: 'one_time'
     },
     targetAudiences: ['B2C'],
@@ -46,7 +46,7 @@ const B2C_PACKAGES = [
     category: 'digital_physical',
     pricing: {
       amount: 69,
-      currency: 'EUR',
+      currency: 'USD',
       billingType: 'one_time'
     },
     targetAudiences: ['B2C'],
@@ -63,7 +63,7 @@ const B2C_PACKAGES = [
     category: 'renewal',
     pricing: {
       amount: 2499,
-      currency: 'EUR',
+      currency: 'USD',
       billingType: 'one_time'
     },
     targetAudiences: ['B2C'],
@@ -94,7 +94,7 @@ async function createB2CPackages() {
       }
 
       const pkg = await Package.create(pkgData);
-      console.log(`✅ Created predefined package: ${pkg.name} (€${pkg.pricing.amount})`);
+      console.log(`✅ Created predefined package: ${pkg.name} ($${pkg.pricing.amount})`);
     }
 
     // Mark all existing packages with matching names as predefined
@@ -122,7 +122,7 @@ const B2B_B2E_PACKAGES = [
     category: 'standard',
     pricing: {
       amount: 22,
-      currency: 'EUR',
+      currency: 'USD',
       billingType: 'one_time'
     },
     targetAudiences: ['B2E'],
@@ -139,7 +139,7 @@ const B2B_B2E_PACKAGES = [
     category: 'standard',
     pricing: {
       amount: 89,
-      currency: 'EUR',
+      currency: 'USD',
       billingType: 'one_time'
     },
     targetAudiences: ['B2C'],
@@ -156,7 +156,7 @@ const B2B_B2E_PACKAGES = [
     category: 'standard',
     pricing: {
       amount: 199,
-      currency: 'EUR',
+      currency: 'USD',
       billingType: 'one_time'
     },
     targetAudiences: ['B2B'],
@@ -173,7 +173,7 @@ const B2B_B2E_PACKAGES = [
     category: 'standard',
     pricing: {
       amount: 299,
-      currency: 'EUR',
+      currency: 'USD',
       billingType: 'subscription'
     },
     targetAudiences: ['B2E'],
@@ -190,7 +190,7 @@ const B2B_B2E_PACKAGES = [
     category: 'standard',
     pricing: {
       amount: 499,
-      currency: 'EUR',
+      currency: 'USD',
       billingType: 'subscription'
     },
     targetAudiences: ['B2B'],
@@ -220,7 +220,7 @@ async function createB2B_B2E_Packages() {
       }
 
       const pkg = await Package.create(pkgData);
-      console.log(`✅ Created predefined package: ${pkg.name} (€${pkg.pricing.amount})`);
+      console.log(`✅ Created predefined package: ${pkg.name} ($${pkg.pricing.amount})`);
     }
 
     // Mark all existing packages with matching names as predefined
