@@ -9,7 +9,8 @@ const router = express.Router();
 router.post(
   '/',
   [
-    body('name').notEmpty(),
+    body('firstName').notEmpty().withMessage('First name is required'),
+    body('lastName').notEmpty().withMessage('Last name is required'),
     body('email').isEmail(),
     body('topic').isIn([
       'b2b_demo',
@@ -32,10 +33,15 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
+      // Combine firstName and lastName for full name
+      const fullName = `${req.body.firstName} ${req.body.lastName}`.trim();
+
       // Log received topic value for debugging
       console.log('📥 Received contact form data:', {
         topic: req.body.topic,
-        name: req.body.name,
+        firstName: req.body.firstName,
+        lastName: req.body.lastName,
+        name: fullName,
         email: req.body.email,
         fullBody: req.body
       });
@@ -102,7 +108,9 @@ router.post(
           topic: req.body.topic,
           mappedSegment: segment,
           source: source,
-          name: req.body.name,
+          firstName: req.body.firstName,
+          lastName: req.body.lastName,
+          name: fullName,
           email: req.body.email
         });
 
@@ -113,7 +121,7 @@ router.post(
         }
 
           const leadData = {
-            name: req.body.name,
+            name: fullName, // Combine firstName and lastName for Lead model
             email: req.body.email,
           organizationName: req.body.organization || req.body.company || '',
           topic: req.body.topic, // Store original topic for reference
