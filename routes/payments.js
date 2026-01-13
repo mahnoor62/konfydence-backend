@@ -509,8 +509,18 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
     // Get packageType from request body (for products page purchases), from shopPagePurchase logic, or from package
     let packageTypeFromRequest = req.body.packageType || requestedPackageType || null;
     
+    // For custom package purchases, set packageType to 'custom'
+    if (customPackage) {
+      packageTypeFromRequest = 'custom';
+      console.log('📦 Custom package purchase - packageType set to custom:', {
+        customPackageId: customPackage._id,
+        customPackageName: customPackage.name,
+        basePackageType: customPackage.basePackageId?.packageType || customPackage.basePackageId?.type,
+        finalPackageType: packageTypeFromRequest
+      });
+    }
     // For regular package purchases, get packageType from package model (package is already loaded above)
-    if (!isDirectProductPurchase && package) {
+    else if (!isDirectProductPurchase && package) {
       packageTypeFromRequest = package.packageType || package.type || package.category;
       console.log('📦 Package purchase - packageType determined:', {
         packageId: package._id,
@@ -523,8 +533,31 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
     }
     
     // Generate unique code for digital/digital_physical packages/products
+    // For custom packages, generate unique code for all types except physical
     // Skip only for physical products
-    if (packageTypeFromRequest && (packageTypeFromRequest === 'digital' || packageTypeFromRequest === 'digital_physical')) {
+    if (customPackage) {
+      // For custom packages, generate unique code for all types except physical
+      if (packageTypeFromRequest !== 'physical') {
+        uniqueCode = generateUniqueCode();
+        let codeExists = await Transaction.findOne({ uniqueCode });
+        while (codeExists) {
+          uniqueCode = generateUniqueCode();
+          codeExists = await Transaction.findOne({ uniqueCode });
+        }
+        console.log('✅ Generated unique code for custom package checkout session:', {
+          customPackageId: customPackage._id,
+          customPackageName: customPackage.name,
+          packageTypeFromRequest,
+          uniqueCode
+        });
+      } else {
+        console.log('⚠️ Skipping unique code generation for physical custom package:', {
+          customPackageId: customPackage._id,
+          customPackageName: customPackage.name,
+          packageTypeFromRequest
+        });
+      }
+    } else if (packageTypeFromRequest && (packageTypeFromRequest === 'digital' || packageTypeFromRequest === 'digital_physical')) {
       uniqueCode = generateUniqueCode();
       let codeExists = await Transaction.findOne({ uniqueCode });
       while (codeExists) {
@@ -800,8 +833,94 @@ router.post('/webhook', async (req, res) => {
             transactionType = 'b2e_contract';
           }
 
-          packageType = customPackage.basePackageId?.packageType || customPackage.basePackageId?.type || 'standard';
+          packageType = 'custom'; // Set packageType to 'custom' for custom packages
           maxSeats = customPackage.seatLimit || seatLimit;
+          
+          // Generate unique code for custom packages (except physical)
+          // Custom packages always need unique codes for digital access
+          const metadataUniqueCode = session.metadata.uniqueCode;
+          const hasValidUniqueCode = metadataUniqueCode && metadataUniqueCode !== '' && metadataUniqueCode !== 'null' && metadataUniqueCode !== 'undefined';
+          
+          // For custom packages, ALWAYS ensure unique code is generated (except physical)
+          if (packageType === 'custom' || packageType === 'digital' || packageType === 'digital_physical') {
+            if (hasValidUniqueCode) {
+              uniqueCode = metadataUniqueCode;
+              console.log('✅ Using unique code from metadata for custom package:', {
+                customPackageId: customPackage._id,
+                customPackageName: customPackage.name,
+                packageType: packageType,
+                uniqueCode: uniqueCode
+              });
+            } else {
+              // Generate new unique code if not in metadata
+              const TransactionModel = require('../models/Transaction');
+              let generatedCode = generateUniqueCode();
+              let codeExists = await TransactionModel.findOne({ uniqueCode: generatedCode });
+              while (codeExists) {
+                generatedCode = generateUniqueCode();
+                codeExists = await TransactionModel.findOne({ uniqueCode: generatedCode });
+              }
+              uniqueCode = generatedCode;
+              console.log('✅ Generated unique code for custom package purchase (webhook):', {
+                customPackageId: customPackage._id,
+                customPackageName: customPackage.name,
+                packageType: packageType,
+                metadataUniqueCode: metadataUniqueCode,
+                generatedUniqueCode: uniqueCode
+              });
+            }
+          } else if (packageType === 'physical') {
+            uniqueCode = undefined;
+            console.log('⚠️ No unique code for physical custom package:', {
+              customPackageId: customPackage._id,
+              customPackageName: customPackage.name,
+              packageType: packageType
+            });
+          } else {
+            // For other package types (standard, renewal), generate unique code
+            if (!hasValidUniqueCode) {
+              const TransactionModel = require('../models/Transaction');
+              let generatedCode = generateUniqueCode();
+              let codeExists = await TransactionModel.findOne({ uniqueCode: generatedCode });
+              while (codeExists) {
+                generatedCode = generateUniqueCode();
+                codeExists = await TransactionModel.findOne({ uniqueCode: generatedCode });
+              }
+              uniqueCode = generatedCode;
+              console.log('✅ Generated unique code for standard custom package purchase (webhook):', {
+                customPackageId: customPackage._id,
+                customPackageName: customPackage.name,
+                packageType: packageType,
+                generatedUniqueCode: uniqueCode
+              });
+            } else {
+              uniqueCode = metadataUniqueCode;
+            }
+          }
+          
+          // FINAL SAFETY CHECK: Ensure unique code is generated for custom packages (except physical)
+          if (packageType === 'custom' && (!uniqueCode || uniqueCode === null || uniqueCode === undefined || uniqueCode === '')) {
+            console.log('🚨 CRITICAL: Unique code missing for digital custom package, generating now BEFORE transaction creation...', {
+              customPackageId: customPackage._id,
+              customPackageName: customPackage.name,
+              packageType: packageType,
+              currentUniqueCode: uniqueCode
+            });
+            const TransactionModel = require('../models/Transaction');
+            let generatedCode = generateUniqueCode();
+            let codeExists = await TransactionModel.findOne({ uniqueCode: generatedCode });
+            while (codeExists) {
+              generatedCode = generateUniqueCode();
+              codeExists = await TransactionModel.findOne({ uniqueCode: generatedCode });
+            }
+            uniqueCode = generatedCode;
+            console.log('✅ CRITICAL FIX: Generated unique code for digital custom package BEFORE transaction creation:', {
+              customPackageId: customPackage._id,
+              customPackageName: customPackage.name,
+              packageType: packageType,
+              generatedUniqueCode: uniqueCode
+            });
+          }
           
           // Calculate expiry date from custom package expiryTime and expiryTimeUnit
           // Start date is purchase date, end date is calculated from purchase date + expiry time
@@ -1829,9 +1948,60 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
               schoolId = customPackage.schoolId._id || customPackage.schoolId;
             }
 
-            packageType = customPackage.basePackageId?.packageType || customPackage.basePackageId?.type || 'standard';
+            packageType = 'custom'; // Set packageType to 'custom' for custom packages
             maxSeats = customPackage.seatLimit || 5;
             contractEndDate = customPackage.contract?.endDate || null;
+
+            // Generate unique code for custom packages (except physical)
+            const metadataUniqueCode = session.metadata.uniqueCode;
+            const hasValidUniqueCode = metadataUniqueCode && metadataUniqueCode !== '' && metadataUniqueCode !== 'null' && metadataUniqueCode !== 'undefined';
+            
+            // Custom packages always need unique codes (except if explicitly physical)
+            if (packageType === 'custom' || packageType === 'digital' || packageType === 'digital_physical') {
+              if (hasValidUniqueCode) {
+                uniqueCode = metadataUniqueCode;
+                console.log('✅ FALLBACK: Using unique code from metadata for custom package:', {
+                  customPackageId: customPackage._id,
+                  packageType: packageType,
+                  uniqueCode: uniqueCode
+                });
+              } else {
+                uniqueCode = generateUniqueCode();
+                let codeExists = await Transaction.findOne({ uniqueCode });
+                while (codeExists) {
+                  uniqueCode = generateUniqueCode();
+                  codeExists = await Transaction.findOne({ uniqueCode });
+                }
+                console.log('✅ FALLBACK: Generated unique code for custom package purchase:', {
+                  customPackageId: customPackage._id,
+                  packageType: packageType,
+                  generatedUniqueCode: uniqueCode
+                });
+              }
+            } else if (packageType === 'physical') {
+              uniqueCode = undefined;
+              console.log('⚠️ FALLBACK: No unique code for physical custom package:', {
+                customPackageId: customPackage._id,
+                packageType: packageType
+              });
+            } else {
+              // For other package types (standard, renewal), generate unique code
+              if (!hasValidUniqueCode) {
+                uniqueCode = generateUniqueCode();
+                let codeExists = await Transaction.findOne({ uniqueCode });
+                while (codeExists) {
+                  uniqueCode = generateUniqueCode();
+                  codeExists = await Transaction.findOne({ uniqueCode });
+                }
+                console.log('✅ FALLBACK: Generated unique code for standard custom package purchase:', {
+                  customPackageId: customPackage._id,
+                  packageType: packageType,
+                  generatedUniqueCode: uniqueCode
+                });
+              } else {
+                uniqueCode = metadataUniqueCode;
+              }
+            }
 
             // Activate custom package
             customPackage.status = 'active';
@@ -2131,9 +2301,29 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             hasUniqueCode: !!uniqueCode
           });
 
-          // FINAL SAFETY CHECK: Ensure unique code is generated for digital/digital_physical packages
+          // FINAL SAFETY CHECK: Ensure unique code is generated for digital/digital_physical packages and custom packages (except physical)
           // This MUST happen before Transaction.create() in fallback path
-          if ((packageType === 'digital' || packageType === 'digital_physical') && (!uniqueCode || uniqueCode === null || uniqueCode === undefined || uniqueCode === '')) {
+          if (customPackage && packageType !== 'physical' && (!uniqueCode || uniqueCode === null || uniqueCode === undefined || uniqueCode === '')) {
+            console.log('🚨 CRITICAL FALLBACK: Unique code missing for custom package, generating now BEFORE transaction creation...', {
+              customPackageId: customPackage._id,
+              customPackageName: customPackage.name,
+              packageType: packageType,
+              currentUniqueCode: uniqueCode
+            });
+            let generatedCode = generateUniqueCode();
+            let codeExists = await Transaction.findOne({ uniqueCode: generatedCode });
+            while (codeExists) {
+              generatedCode = generateUniqueCode();
+              codeExists = await Transaction.findOne({ uniqueCode: generatedCode });
+            }
+            uniqueCode = generatedCode;
+            console.log('✅ CRITICAL FALLBACK FIX: Generated unique code for custom package BEFORE transaction creation:', {
+              customPackageId: customPackage._id,
+              customPackageName: customPackage.name,
+              packageType: packageType,
+              generatedUniqueCode: uniqueCode
+            });
+          } else if ((packageType === 'digital' || packageType === 'digital_physical') && (!uniqueCode || uniqueCode === null || uniqueCode === undefined || uniqueCode === '')) {
             console.log('🚨 CRITICAL FALLBACK: Unique code missing for digital package, generating now BEFORE transaction creation...', {
               packageId: package?._id,
               packageName: package?.name,

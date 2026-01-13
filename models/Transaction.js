@@ -26,7 +26,7 @@ const TransactionSchema = new Schema(
     },
     packageType: {
       type: String,
-      enum: ['standard', 'digital', 'physical', 'digital_physical', 'renewal']
+      enum: ['standard', 'digital', 'physical', 'digital_physical', 'renewal', 'custom']
     },
     productId: {
       type: Schema.Types.ObjectId,
