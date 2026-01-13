@@ -17,13 +17,26 @@ const ContactMessageSchema = new Schema(
         'scam-survival-kit',
         'education-youth-pack',
         'comasy',
+        'CoMaSi',
         'nis2-audit',
         'partnerships',
-        'media-press'
+        'media-press',
+        'demo-families',
+        'demo-schools',
+        'demo-businesses'
       ],
       required: true
     },
     message: { type: String, required: true },
+    // Demo request additional fields
+    department: { type: String },
+    position: { type: String },
+    address: { type: String },
+    city: { type: String },
+    state: { type: String },
+    country: { type: String },
+    phone: { type: String },
+    website: { type: String },
     status: {
       type: String,
       enum: ['new', 'read', 'replied', 'closed'],

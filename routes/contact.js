@@ -22,7 +22,11 @@ router.post(
       'comasy',
       'nis2-audit',
       'partnerships',
-      'media-press'
+      'media-press',
+      'demo-families',
+      'demo-schools',
+      'demo-businesses',
+      'CoMaSi'
     ]),
     body('message').optional()
   ], // Validation updated
@@ -74,13 +78,17 @@ router.post(
         // Educational Institute topics → B2E
         'education': 'B2E',
         'education-youth-pack': 'B2E',
+        'demo-schools': 'B2E',
         
         // Company/Business topics → B2B
         'b2b_demo': 'B2B',
         'comasy': 'B2B',
+        'CoMaSi': 'B2B',
         'nis2-audit': 'B2B',
+        'demo-businesses': 'B2B',
         
-        // All other topics → 'other'
+        // Family/Consumer topics → 'other'
+        'demo-families': 'other',
         'scam-survival-kit': 'other',
         'b2c_question': 'other',
         'partnerships': 'other',
@@ -93,25 +101,35 @@ router.post(
         // Get segment from topic mapping, with fallback to 'other' if topic not found
         const segment = topicToSegmentMap[req.body.topic] || 'other';
         
-        // Determine source based on topic
-        // B2B topics (comasy, b2b_demo, nis2-audit) should use 'b2b_form'
-        // B2E topics (education, education-youth-pack) should use 'b2e_form'
-        // All others use 'contact_form'
-        let source = 'contact_form';
-        if (['comasy', 'b2b_demo', 'nis2-audit'].includes(req.body.topic)) {
-          source = 'b2b_form';
-        } else if (['education', 'education-youth-pack'].includes(req.body.topic)) {
-          source = 'b2e_form';
+        // Determine source based on form origin
+        // If submitted from contact page (/contact), always use 'contact_form'
+        // If submitted from CoMaSi page, use 'b2b_form'
+        // If submitted from Education page, use 'b2e_form'
+        // Check for formSource in request body, if not present, default to 'contact_form'
+        let source = req.body.formSource || 'contact_form';
+        
+        // If formSource is not provided, determine from topic (for backward compatibility)
+        // But contact page should always send formSource='contact_form'
+        if (!req.body.formSource) {
+          // Default to contact_form for contact page submissions
+          source = 'contact_form';
         }
 
         console.log('📝 Creating lead from contact form:', {
-          topic: req.body.topic,
-          mappedSegment: segment,
+          topic: req.body.topic, // Original topic from form
+          mappedSegment: segment, // Segment mapped from topic
           source: source,
           firstName: req.body.firstName,
           lastName: req.body.lastName,
           name: fullName,
           email: req.body.email
+        });
+        
+        // Verify topic and segment mapping for contact form
+        console.log('✅ Topic & Segment Verification:', {
+          selectedTopic: req.body.topic,
+          mappedSegment: segment,
+          topicToSegmentMap: topicToSegmentMap[req.body.topic] || 'not found in map'
         });
 
         // Ensure segment is valid (required field in Lead schema)
@@ -124,15 +142,24 @@ router.post(
             name: fullName, // Combine firstName and lastName for Lead model
             email: req.body.email,
           organizationName: req.body.organization || req.body.company || '',
-          topic: req.body.topic, // Store original topic for reference
-            segment: segment,
+          topic: req.body.topic, // Store original topic exactly as received from form
+            segment: segment, // Segment mapped from topic
             source: source,
             status: 'new',
           engagementCount: 0,
-          demoRequested: ['b2b_demo', 'comasy', 'nis2-audit'].includes(req.body.topic), // Mark as demo requested if B2B/Comasy related
+          demoRequested: ['b2b_demo', 'comasy', 'nis2-audit', 'CoMaSi', 'demo-families', 'demo-schools', 'demo-businesses'].includes(req.body.topic), // Mark as demo requested if demo topic
           teamSize: req.body.teamSize || '', // Save team size if provided (B2B)
           studentStaffSize: req.body.studentStaffSize || '', // Save student/staff size if provided (B2E)
-          message: req.body.message || '' // Save original message
+          message: req.body.message || '', // Save original message
+          // Address fields for demo topics (from contact form)
+          address: req.body.address || '',
+          city: req.body.city || '',
+          state: req.body.state || '',
+          country: req.body.country || '',
+          phone: req.body.phone || '',
+          department: req.body.department || '',
+          position: req.body.position || '',
+          website: req.body.website || ''
         };
 
         console.log('📦 Lead data to be created:', leadData);
@@ -146,9 +173,9 @@ router.post(
           leadId: lead._id,
           name: lead.name,
           email: lead.email,
-          segment: lead.segment,
+          topic: lead.topic, // Saved topic (should match req.body.topic)
+          segment: lead.segment, // Saved segment (mapped from topic)
           source: lead.source,
-          topic: req.body.topic,
           organizationName: lead.organizationName
         });
         } catch (unifiedError) {

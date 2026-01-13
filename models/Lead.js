@@ -18,6 +18,46 @@ const LeadSchema = new Schema(
       type: String,
       trim: true
     },
+    department: {
+      type: String,
+      trim: true,
+      comment: 'Department from demo request form'
+    },
+    position: {
+      type: String,
+      trim: true,
+      comment: 'Position/Job title from demo request form'
+    },
+    address: {
+      type: String,
+      trim: true,
+      comment: 'Street address from demo request form'
+    },
+    city: {
+      type: String,
+      trim: true,
+      comment: 'City from demo request form'
+    },
+    state: {
+      type: String,
+      trim: true,
+      comment: 'State/Province from demo request form'
+    },
+    country: {
+      type: String,
+      trim: true,
+      comment: 'Country from demo request form'
+    },
+    phone: {
+      type: String,
+      trim: true,
+      comment: 'Phone number from demo request form'
+    },
+    website: {
+      type: String,
+      trim: true,
+      comment: 'Website URL from demo request form'
+    },
     teamSize: {
       type: String,
       trim: true,
