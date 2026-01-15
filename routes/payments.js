@@ -413,9 +413,16 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       requestedPackageType = req.body.packageType || 'physical';
       const requestedMaxSeats = req.body.maxSeats !== undefined ? parseInt(req.body.maxSeats) : null;
       
-      // Use product price directly
+      // Determine price: For shop page physical product (Tactical Card Game Kit), use $49
+      let productPrice = product.price || 0;
+      if (isShopPagePurchase && requestedPackageType === 'physical') {
+        // Override price to $49 for shop page physical product
+        productPrice = 49;
+      }
+      
+      // Use product price (or overridden price for shop page physical)
       pricing = {
-        amount: product.price || 0,
+        amount: productPrice,
         currency: 'USD', // Always USD for direct product purchases
         billingType: 'one_time'
       };
