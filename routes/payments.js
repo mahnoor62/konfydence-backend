@@ -843,19 +843,15 @@ router.post('/webhook', async (req, res) => {
   try {
     if (webhookSecret && stripe) {
       // CRITICAL: req.body should be a Buffer from express.raw()
-      // If it's already parsed, we can't verify signature
-      let rawBody = req.body;
+      // Use req.rawBody if available (from verify callback), otherwise use req.body
+      let rawBody = req.rawBody || req.body;
       
       // If body is already parsed (object), we can't verify - this shouldn't happen
       if (typeof rawBody === 'object' && !Buffer.isBuffer(rawBody)) {
         console.error('❌ CRITICAL: Webhook body is already parsed! Raw body parser not working.');
         console.error('Body type:', typeof rawBody, 'Is Buffer:', Buffer.isBuffer(rawBody));
-        // Try to get raw body from request if available
-        if (req.rawBody) {
-          rawBody = req.rawBody;
-        } else {
-          return res.status(400).send('Webhook Error: Body already parsed. Raw body required for signature verification.');
-        }
+        console.error('Has rawBody:', !!req.rawBody, 'req.body type:', typeof req.body);
+        return res.status(400).send('Webhook Error: Body already parsed. Raw body required for signature verification.');
       }
       
       // Convert Buffer to string if needed (Stripe expects string or Buffer)
