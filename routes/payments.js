@@ -1275,40 +1275,76 @@ router.post('/webhook', async (req, res) => {
           // CRITICAL: productId might be string or ObjectId, handle both
           let product = null;
           try {
+            // FIRST: Get all products to debug and verify connection
+            const allProductsDebug = await Product.find({}).select('_id title name').limit(10);
+            const productIds = allProductsDebug.map(p => p._id.toString());
+            console.log('🔍 DEBUG: All products in DB (checkout.session.completed):', {
+              count: allProductsDebug.length,
+              ids: productIds,
+              searchingFor: productId,
+              productIdTrimmed: productId?.trim(),
+              productIdInList: productIds.includes(productId?.trim() || productId)
+            });
+            
+            // Trim productId in case of whitespace
+            const trimmedProductId = (productId || '').trim();
+            
             // Convert productId to ObjectId if it's a string
-            let productIdToSearch = productId;
-            if (typeof productId === 'string' && mongoose.Types.ObjectId.isValid(productId)) {
-              productIdToSearch = new mongoose.Types.ObjectId(productId);
+            let productIdToSearch = trimmedProductId;
+            if (typeof trimmedProductId === 'string' && mongoose.Types.ObjectId.isValid(trimmedProductId)) {
+              productIdToSearch = new mongoose.Types.ObjectId(trimmedProductId);
             }
             
-            // Try to find by ID (handles both string and ObjectId)
-            product = await Product.findById(productIdToSearch);
-            if (!product) {
-              // If not found, try with original productId (string format)
-              product = await Product.findById(productId);
+            // Try multiple methods to find product
+            // Method 1: findById with ObjectId
+            if (mongoose.Types.ObjectId.isValid(trimmedProductId)) {
+              product = await Product.findById(new mongoose.Types.ObjectId(trimmedProductId));
+              console.log('🔍 Method 1 (findById ObjectId):', product ? '✅ Found' : '❌ Not found');
             }
+            
+            // Method 2: findById with string
             if (!product) {
-              // Try findOne with _id
-              product = await Product.findOne({ _id: productId });
+              product = await Product.findById(trimmedProductId);
+              console.log('🔍 Method 2 (findById string):', product ? '✅ Found' : '❌ Not found');
             }
+            
+            // Method 3: findOne with _id string
             if (!product) {
-              // Try findOne with ObjectId
-              if (mongoose.Types.ObjectId.isValid(productId)) {
-                product = await Product.findOne({ _id: new mongoose.Types.ObjectId(productId) });
+              product = await Product.findOne({ _id: trimmedProductId });
+              console.log('🔍 Method 3 (findOne _id string):', product ? '✅ Found' : '❌ Not found');
+            }
+            
+            // Method 4: findOne with _id ObjectId
+            if (!product && mongoose.Types.ObjectId.isValid(trimmedProductId)) {
+              product = await Product.findOne({ _id: new mongoose.Types.ObjectId(trimmedProductId) });
+              console.log('🔍 Method 4 (findOne _id ObjectId):', product ? '✅ Found' : '❌ Not found');
+            }
+            
+            // Method 5: If productId is in the list, try direct match
+            if (!product && productIds.includes(trimmedProductId)) {
+              console.log('⚠️ Product ID exists in list, trying direct findOne...');
+              product = await Product.findOne({ _id: trimmedProductId });
+              if (!product) {
+                product = await Product.findOne({ _id: new mongoose.Types.ObjectId(trimmedProductId) });
               }
+              console.log('🔍 Method 5 (direct match):', product ? '✅ Found' : '❌ Not found');
             }
+            
             if (!product) {
               // Log detailed error for debugging
               console.error('❌ Product not found for direct purchase:', {
-                productId,
-                productIdType: typeof productId,
-                productIdLength: productId?.length,
-                isValidObjectId: mongoose.Types.ObjectId.isValid(productId),
+                productId: trimmedProductId,
+                productIdType: typeof trimmedProductId,
+                productIdLength: trimmedProductId?.length,
+                isValidObjectId: mongoose.Types.ObjectId.isValid(trimmedProductId),
                 sessionId: session.id,
                 metadata: session.metadata,
-                allProductsCount: await Product.countDocuments()
+                allProductsCount: await Product.countDocuments(),
+                allProductIds: productIds,
+                searchingFor: trimmedProductId,
+                productIdInList: productIds.includes(trimmedProductId)
               });
-              return res.json({ received: true, error: 'Product not found', productId });
+              return res.json({ received: true, error: 'Product not found', productId: trimmedProductId, availableIds: productIds });
             }
             console.log('✅ Product found for direct purchase:', {
               productId: product._id,
@@ -2082,41 +2118,77 @@ router.post('/webhook', async (req, res) => {
           // CRITICAL: productId might be string or ObjectId, handle both
           let product = null;
           try {
+            // FIRST: Get all products to debug and verify connection
+            const allProductsDebug = await Product.find({}).select('_id title name').limit(10);
+            const productIds = allProductsDebug.map(p => p._id.toString());
+            console.log('🔍 DEBUG: All products in DB (payment_intent.succeeded):', {
+              count: allProductsDebug.length,
+              ids: productIds,
+              searchingFor: productId,
+              productIdTrimmed: productId?.trim(),
+              productIdInList: productIds.includes(productId?.trim() || productId)
+            });
+            
+            // Trim productId in case of whitespace
+            const trimmedProductId = (productId || '').trim();
+            
             // Convert productId to ObjectId if it's a string
-            let productIdToSearch = productId;
-            if (typeof productId === 'string' && mongoose.Types.ObjectId.isValid(productId)) {
-              productIdToSearch = new mongoose.Types.ObjectId(productId);
+            let productIdToSearch = trimmedProductId;
+            if (typeof trimmedProductId === 'string' && mongoose.Types.ObjectId.isValid(trimmedProductId)) {
+              productIdToSearch = new mongoose.Types.ObjectId(trimmedProductId);
             }
             
-            // Try to find by ID (handles both string and ObjectId)
-            product = await Product.findById(productIdToSearch);
-            if (!product) {
-              // If not found, try with original productId (string format)
-              product = await Product.findById(productId);
+            // Try multiple methods to find product
+            // Method 1: findById with ObjectId
+            if (mongoose.Types.ObjectId.isValid(trimmedProductId)) {
+              product = await Product.findById(new mongoose.Types.ObjectId(trimmedProductId));
+              console.log('🔍 Method 1 (findById ObjectId):', product ? '✅ Found' : '❌ Not found');
             }
+            
+            // Method 2: findById with string
             if (!product) {
-              // Try findOne with _id
-              product = await Product.findOne({ _id: productId });
+              product = await Product.findById(trimmedProductId);
+              console.log('🔍 Method 2 (findById string):', product ? '✅ Found' : '❌ Not found');
             }
+            
+            // Method 3: findOne with _id string
             if (!product) {
-              // Try findOne with ObjectId
-              if (mongoose.Types.ObjectId.isValid(productId)) {
-                product = await Product.findOne({ _id: new mongoose.Types.ObjectId(productId) });
+              product = await Product.findOne({ _id: trimmedProductId });
+              console.log('🔍 Method 3 (findOne _id string):', product ? '✅ Found' : '❌ Not found');
+            }
+            
+            // Method 4: findOne with _id ObjectId
+            if (!product && mongoose.Types.ObjectId.isValid(trimmedProductId)) {
+              product = await Product.findOne({ _id: new mongoose.Types.ObjectId(trimmedProductId) });
+              console.log('🔍 Method 4 (findOne _id ObjectId):', product ? '✅ Found' : '❌ Not found');
+            }
+            
+            // Method 5: If productId is in the list, try direct match
+            if (!product && productIds.includes(trimmedProductId)) {
+              console.log('⚠️ Product ID exists in list, trying direct findOne...');
+              product = await Product.findOne({ _id: trimmedProductId });
+              if (!product) {
+                product = await Product.findOne({ _id: new mongoose.Types.ObjectId(trimmedProductId) });
               }
+              console.log('🔍 Method 5 (direct match):', product ? '✅ Found' : '❌ Not found');
             }
+            
             if (!product) {
               // Log detailed error for debugging
               console.error('❌ Product not found for direct purchase (payment_intent):', {
-                productId,
-                productIdType: typeof productId,
-                productIdLength: productId?.length,
-                isValidObjectId: mongoose.Types.ObjectId.isValid(productId),
+                productId: trimmedProductId,
+                productIdType: typeof trimmedProductId,
+                productIdLength: trimmedProductId?.length,
+                isValidObjectId: mongoose.Types.ObjectId.isValid(trimmedProductId),
                 paymentIntentId: paymentIntent.id,
                 sessionMetadata: sessionMetadata,
                 paymentIntentMetadata: paymentIntent.metadata,
-                allProductsCount: await Product.countDocuments()
+                allProductsCount: await Product.countDocuments(),
+                allProductIds: productIds,
+                searchingFor: trimmedProductId,
+                productIdInList: productIds.includes(trimmedProductId)
               });
-              return res.status(200).json({ received: true, error: 'Product not found', productId });
+              return res.status(200).json({ received: true, error: 'Product not found', productId: trimmedProductId, availableIds: productIds });
             }
             console.log('✅ Product found for direct purchase (payment_intent):', {
               productId: product._id,
