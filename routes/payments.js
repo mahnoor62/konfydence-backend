@@ -803,21 +803,46 @@ router.post('/webhook', async (req, res) => {
     // Log webhook data structure for debugging
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
-      console.log('🔍 Webhook Session Details:', {
+      console.log('🔍 Webhook Session Details (Initial):', {
         sessionId: session.id,
         paymentIntentId: session.payment_intent,
         paymentStatus: session.payment_status,
+        customerEmail: session.customer_email,
+        customer: session.customer,
+        hasMetadata: !!session.metadata,
+        metadataKeys: session.metadata ? Object.keys(session.metadata) : [],
+        metadata: session.metadata,
         directProductPurchase: session.metadata?.directProductPurchase,
         shopPagePurchase: session.metadata?.shopPagePurchase,
         packageType: session.metadata?.packageType,
         productId: session.metadata?.productId,
-        packageId: session.metadata?.packageId
+        packageId: session.metadata?.packageId,
+        userId: session.metadata?.userId
       });
     }
 
     // Handle Stripe Checkout Session completed
     if (event.type === 'checkout.session.completed') {
-      const session = event.data.object;
+      let session = event.data.object;
+      
+      // CRITICAL: If metadata is empty or missing, retrieve full session from Stripe API
+      if (!session.metadata || Object.keys(session.metadata).length === 0) {
+        console.log('⚠️ Session metadata is empty, retrieving full session from Stripe API...');
+        try {
+          session = await stripe.checkout.sessions.retrieve(session.id, {
+            expand: ['payment_intent', 'customer']
+          });
+          console.log('✅ Retrieved full session from Stripe API:', {
+            sessionId: session.id,
+            hasMetadata: !!session.metadata,
+            metadataKeys: session.metadata ? Object.keys(session.metadata) : [],
+            customerEmail: session.customer_email,
+            customer: session.customer
+          });
+        } catch (err) {
+          console.error('❌ Error retrieving session from Stripe API:', err.message);
+        }
+      }
       
       // Check if transaction already exists for this checkout session (prevent duplicates)
       let transaction = await Transaction.findOne({
@@ -866,7 +891,8 @@ router.post('/webhook', async (req, res) => {
             paymentIntentId: session.payment_intent,
             metadata: session.metadata,
             customerEmail: session.customer_email,
-            customer: session.customer
+            customer: session.customer,
+            allSessionKeys: Object.keys(session)
           });
           
           // Try to find user by customer email as fallback
@@ -881,8 +907,29 @@ router.post('/webhook', async (req, res) => {
             }
           }
           
+          // Try to find user by customer ID if customer_email didn't work
+          if (!userId && session.customer) {
+            try {
+              const customer = await stripe.customers.retrieve(session.customer);
+              if (customer.email) {
+                const userByCustomerEmail = await User.findOne({ email: customer.email });
+                if (userByCustomerEmail) {
+                  userId = userByCustomerEmail._id.toString();
+                  console.log('✅ Found user by Stripe customer email:', {
+                    userId: userId,
+                    customerId: session.customer,
+                    email: customer.email
+                  });
+                }
+              }
+            } catch (err) {
+              console.warn('⚠️ Could not retrieve Stripe customer:', err.message);
+            }
+          }
+          
           if (!userId) {
-            console.error('❌ Cannot create transaction: userId missing and user not found by email');
+            console.error('❌ Cannot create transaction: userId missing and user not found by any method');
+            console.error('❌ Full session object:', JSON.stringify(session, null, 2));
             // Return 200 to prevent Stripe retries, but log the error
             return res.status(200).json({ 
               received: true, 
