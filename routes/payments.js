@@ -767,6 +767,21 @@ router.post('/webhook', async (req, res) => {
       created: new Date(event.created * 1000)
     });
 
+    // Log webhook data structure for debugging
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
+      console.log('🔍 Webhook Session Details:', {
+        sessionId: session.id,
+        paymentIntentId: session.payment_intent,
+        paymentStatus: session.payment_status,
+        directProductPurchase: session.metadata?.directProductPurchase,
+        shopPagePurchase: session.metadata?.shopPagePurchase,
+        packageType: session.metadata?.packageType,
+        productId: session.metadata?.productId,
+        packageId: session.metadata?.packageId
+      });
+    }
+
     // Handle Stripe Checkout Session completed
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
@@ -775,6 +790,30 @@ router.post('/webhook', async (req, res) => {
       let transaction = await Transaction.findOne({
         stripePaymentIntentId: session.payment_intent || session.id,
       });
+
+      // If transaction already exists (created via fallback), update it with webhook data
+      if (transaction) {
+        console.log('📝 Transaction already exists, updating with webhook data:', {
+          transactionId: transaction._id,
+          stripePaymentIntentId: transaction.stripePaymentIntentId,
+          webhookEventType: event.type,
+          webhookEventId: event.id
+        });
+
+        // Update transaction with webhook data
+        transaction.webhookData = webhookEventData;
+        transaction.webhookEventType = event.type;
+        transaction.webhookReceivedAt = new Date();
+        await transaction.save();
+
+        console.log('✅ Transaction updated with webhook data:', {
+          transactionId: transaction._id,
+          webhookEventType: event.type
+        });
+
+        // Return early since transaction already exists
+        return res.json({ received: true, processed: true, updated: true });
+      }
 
         // Only create transaction if it doesn't exist (prevent duplicates)
       if (!transaction) {
@@ -1359,11 +1398,19 @@ router.post('/webhook', async (req, res) => {
           webhookReceivedAt: new Date(),
         });
 
-        console.log('✅ Transaction created via webhook with webhook data:', {
+        console.log('✅ Transaction created via WEBHOOK (PRIMARY METHOD) with webhook data:', {
           transactionId: transaction._id,
           webhookEventType: event.type,
           webhookEventId: event.id,
-          stripePaymentIntentId: transaction.stripePaymentIntentId
+          stripePaymentIntentId: transaction.stripePaymentIntentId,
+          directProductPurchase: directProductPurchase,
+          shopPagePurchase: session.metadata?.shopPagePurchase === 'true',
+          productsPagePurchase: directProductPurchase && session.metadata?.packageType && session.metadata?.shopPagePurchase !== 'true',
+          packageType: packageType,
+          productId: productId,
+          packageId: packageId,
+          hasWebhookData: !!transaction.webhookData,
+          webhookDataKeys: transaction.webhookData ? Object.keys(transaction.webhookData) : []
         });
 
         // Update GameProgress isDemo to false when user makes a purchase
@@ -1602,7 +1649,27 @@ router.post('/webhook', async (req, res) => {
 
         console.log('Transaction created and membership added for checkout session:', session.id);
       } else {
-        console.log('Transaction already exists for checkout session:', session.id);
+        // Transaction already exists - update with webhook data if not already set
+        if (transaction && (!transaction.webhookData || !transaction.webhookEventType)) {
+          console.log('📝 Updating existing transaction with webhook data:', {
+            transactionId: transaction._id,
+            stripePaymentIntentId: transaction.stripePaymentIntentId,
+            webhookEventType: event.type,
+            webhookEventId: event.id
+          });
+
+          transaction.webhookData = webhookEventData;
+          transaction.webhookEventType = event.type;
+          transaction.webhookReceivedAt = new Date();
+          await transaction.save();
+
+          console.log('✅ Transaction updated with webhook data:', {
+            transactionId: transaction._id,
+            webhookEventType: event.type
+          });
+        } else {
+          console.log('Transaction already exists for checkout session:', session.id);
+        }
       }
     } else if (event.type === 'payment_intent.succeeded') {
       // Also handle payment_intent.succeeded for backward compatibility
@@ -1612,6 +1679,30 @@ router.post('/webhook', async (req, res) => {
       let transaction = await Transaction.findOne({
         stripePaymentIntentId: paymentIntent.id,
       });
+
+      // If transaction already exists (created via fallback), update it with webhook data
+      if (transaction) {
+        console.log('📝 Transaction already exists (payment_intent), updating with webhook data:', {
+          transactionId: transaction._id,
+          stripePaymentIntentId: transaction.stripePaymentIntentId,
+          webhookEventType: event.type,
+          webhookEventId: event.id
+        });
+
+        // Update transaction with webhook data
+        transaction.webhookData = webhookEventData;
+        transaction.webhookEventType = event.type;
+        transaction.webhookReceivedAt = new Date();
+        await transaction.save();
+
+        console.log('✅ Transaction updated with webhook data (payment_intent):', {
+          transactionId: transaction._id,
+          webhookEventType: event.type
+        });
+
+        // Return early since transaction already exists
+        return res.json({ received: true, processed: true, updated: true });
+      }
 
       if (!transaction && paymentIntent.metadata.userId) {
         const userId = paymentIntent.metadata.userId;
@@ -2662,7 +2753,15 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             // Don't fail the transaction if email fails
           }
 
-          console.log('Transaction created via fallback for session:', session.id);
+          console.log('⚠️ Transaction created via FALLBACK (SECONDARY METHOD) for session:', {
+            sessionId: session.id,
+            paymentIntentId: session.payment_intent,
+            directProductPurchase: directProductPurchase,
+            shopPagePurchase: session.metadata?.shopPagePurchase === 'true',
+            productsPagePurchase: directProductPurchase && session.metadata?.packageType && session.metadata?.shopPagePurchase !== 'true',
+            packageType: session.metadata?.packageType,
+            note: 'This should only happen if webhook is delayed or failed. Webhook data will be added when webhook arrives.'
+          });
           
           // Populate transaction for response
           transaction = await Transaction.findById(transaction._id)
