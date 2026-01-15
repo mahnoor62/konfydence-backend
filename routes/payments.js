@@ -992,7 +992,15 @@ router.post('/webhook', async (req, res) => {
         }
         
         // CRITICAL FIX: Get userId from metadata first, then fetch user
-        let userId = session.metadata?.userId || null;
+        // Handle userId extraction more robustly - trim whitespace and validate
+        let userId = null;
+        if (session.metadata?.userId) {
+          userId = String(session.metadata.userId).trim();
+          if (userId === '' || userId === 'null' || userId === 'undefined') {
+            userId = null;
+          }
+        }
+        
         let user = null;
         
         if (userId) {
@@ -1016,17 +1024,28 @@ router.post('/webhook', async (req, res) => {
         
         // If still no user, try email lookup
         if (!user && session?.customer_email) {
-          user = await User.findOne({ email: session.customer_email });
-          if (user) {
-            userId = user._id.toString();
+          try {
+            user = await User.findOne({ email: session.customer_email });
+            if (user) {
+              userId = user._id.toString();
+              console.log('✅ Found user by email fallback:', {
+                email: session.customer_email,
+                userId: userId
+              });
+            }
+          } catch (err) {
+            console.error('❌ Error fetching user by email:', err.message);
           }
         }
         
         if (!userId || !user) {
           console.error('❌ Cannot create transaction: userId missing and user not found by any method', {
             userIdFromMetadata: session.metadata?.userId,
+            userIdAfterProcessing: userId,
             customerEmail: session.customer_email,
-            sessionId: session.id
+            sessionId: session.id,
+            hasMetadata: !!session.metadata,
+            metadataKeys: session.metadata ? Object.keys(session.metadata) : []
           });
           return res.status(200).json({ 
             received: true, 
@@ -1354,9 +1373,9 @@ router.post('/webhook', async (req, res) => {
             }
             
             console.log(`✅ ${isShopPagePurchase ? 'Shop page' : 'Products page'} purchase:`, {
-              productId: product._id,
-              productName: product.title || product.name,
-              price: product.price,
+              productId: product ? product._id : productId,
+              productName: product ? (product.title || product.name) : 'Product not found',
+              price: product ? product.price : 'N/A',
               packageType: packageType,
               maxSeats: maxSeats,
               hasUniqueCode: !!uniqueCode
@@ -1374,9 +1393,9 @@ router.post('/webhook', async (req, res) => {
           contractEndDate = setEndOfDay(expiryDate);
           
           console.log('✅ Direct product purchase:', {
-            productId: product._id,
-            productName: product.title || product.name,
-            price: product.price,
+            productId: product ? product._id : productId,
+            productName: product ? (product.title || product.name) : 'Product not found',
+            price: product ? product.price : 'N/A',
             urlType: urlType,
             userRole: user.role,
             transactionType: transactionType,
@@ -2000,13 +2019,17 @@ router.post('/webhook', async (req, res) => {
             limit: 1
           });
           if (sessions.data && sessions.data.length > 0) {
-            session = sessions.data[0];
+            // Retrieve full session with all details
+            session = await stripe.checkout.sessions.retrieve(sessions.data[0].id, {
+              expand: ['payment_intent', 'customer']
+            });
             sessionMetadata = session.metadata || {};
             console.log('✅ Found checkout session by payment intent ID:', {
               sessionId: session.id,
               paymentIntentId: paymentIntent.id,
               hasMetadata: !!session.metadata,
-              metadataKeys: session.metadata ? Object.keys(session.metadata) : []
+              metadataKeys: session.metadata ? Object.keys(session.metadata) : [],
+              customerEmail: session.customer_email
             });
           }
         } catch (err) {
@@ -2048,7 +2071,16 @@ router.post('/webhook', async (req, res) => {
 
       // CRITICAL FIX: Get userId from metadata first, then fetch user
       // Priority: session.metadata (most reliable - from checkout session) > sessionMetadata > paymentIntent.metadata
-      let userId = session?.metadata?.userId || sessionMetadata?.userId || paymentIntent.metadata?.userId || null;
+      // Handle userId extraction more robustly - trim whitespace and validate
+      let userIdRaw = session?.metadata?.userId || sessionMetadata?.userId || paymentIntent.metadata?.userId || null;
+      let userId = null;
+      if (userIdRaw) {
+        userId = String(userIdRaw).trim();
+        if (userId === '' || userId === 'null' || userId === 'undefined') {
+          userId = null;
+        }
+      }
+      
       let user = null;
       
       // Log metadata sources for debugging
@@ -2058,6 +2090,8 @@ router.post('/webhook', async (req, res) => {
         sessionMetadata: session?.metadata?.userId,
         sessionMetadataObject: sessionMetadata?.userId,
         paymentIntentMetadata: paymentIntent.metadata?.userId,
+        userIdRaw: userIdRaw,
+        userIdAfterProcessing: userId,
         allSessionMetadataKeys: session?.metadata ? Object.keys(session.metadata) : [],
         allSessionMetadataObjectKeys: Object.keys(sessionMetadata || {}),
         finalUserId: userId
@@ -2084,17 +2118,33 @@ router.post('/webhook', async (req, res) => {
       
       // If still no user, try email lookup from paymentIntent
       if (!user && paymentIntent.receipt_email) {
-        user = await User.findOne({ email: paymentIntent.receipt_email });
-        if (user) {
-          userId = user._id.toString();
+        try {
+          user = await User.findOne({ email: paymentIntent.receipt_email });
+          if (user) {
+            userId = user._id.toString();
+            console.log('✅ Found user by paymentIntent receipt_email fallback:', {
+              email: paymentIntent.receipt_email,
+              userId: userId
+            });
+          }
+        } catch (err) {
+          console.error('❌ Error fetching user by receipt_email:', err.message);
         }
       }
       
       // If still no user, try email lookup from session
       if (!user && session?.customer_email) {
-        user = await User.findOne({ email: session.customer_email });
-        if (user) {
-          userId = user._id.toString();
+        try {
+          user = await User.findOne({ email: session.customer_email });
+          if (user) {
+            userId = user._id.toString();
+            console.log('✅ Found user by session customer_email fallback:', {
+              email: session.customer_email,
+              userId: userId
+            });
+          }
+        } catch (err) {
+          console.error('❌ Error fetching user by customer_email:', err.message);
         }
       }
       
@@ -2103,9 +2153,12 @@ router.post('/webhook', async (req, res) => {
           userIdFromPaymentIntent: paymentIntent.metadata?.userId,
           userIdFromSessionMetadata: sessionMetadata?.userId,
           userIdFromSession: session?.metadata?.userId,
+          userIdAfterProcessing: userId,
           receiptEmail: paymentIntent.receipt_email,
           customerEmail: session?.customer_email,
-          paymentIntentId: paymentIntent.id
+          paymentIntentId: paymentIntent.id,
+          hasSession: !!session,
+          hasSessionMetadata: !!sessionMetadata
         });
         return res.status(200).json({ 
           received: true, 
