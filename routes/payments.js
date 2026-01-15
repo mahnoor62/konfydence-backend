@@ -92,75 +92,47 @@ const resolveUserIdFromCheckout = async (session, paymentIntent = null, stripe =
   let source = 'none';
   let user = null;
 
-  // Priority 1: session.metadata.userId (PRIMARY - set during checkout creation from req.userId)
-  if (session?.metadata?.userId) {
-    userId = session.metadata.userId;
-    source = 'session.metadata.userId';
-    console.log('✅ resolveUserIdFromCheckout: Found userId from session.metadata.userId', {
-      userId,
-      source,
-      sessionId: session.id
-    });
-  }
-  // Priority 2: paymentIntent.metadata.userId (if payment intent provided)
-  else if (paymentIntent?.metadata?.userId) {
-    userId = paymentIntent.metadata.userId;
-    source = 'paymentIntent.metadata.userId';
-    console.log('✅ resolveUserIdFromCheckout: Found userId from paymentIntent.metadata.userId', {
-      userId,
-      source,
-      paymentIntentId: paymentIntent.id
-    });
-  }
-  // Priority 3: session.customer_email → find user by email
-  else if (session?.customer_email) {
-    user = await User.findOne({ email: session.customer_email });
-    if (user) {
-      userId = user._id.toString();
-      source = 'session.customer_email';
-      console.log('✅ resolveUserIdFromCheckout: Found userId from session.customer_email', {
-        userId,
-        source,
-        email: session.customer_email,
-        sessionId: session.id
-      });
-    }
-  }
-  // Priority 4: paymentIntent.receipt_email → find user by email
-  else if (paymentIntent?.receipt_email) {
-    user = await User.findOne({ email: paymentIntent.receipt_email });
-    if (user) {
-      userId = user._id.toString();
-      source = 'paymentIntent.receipt_email';
-      console.log('✅ resolveUserIdFromCheckout: Found userId from paymentIntent.receipt_email', {
-        userId,
-        source,
-        email: paymentIntent.receipt_email,
-        paymentIntentId: paymentIntent.id
-      });
-    }
-  }
-  // Priority 5: Stripe customer email → find user by email
-  else if (session?.customer && stripe) {
-    try {
-      const customer = await stripe.customers.retrieve(session.customer);
-      if (customer?.email) {
-        user = await User.findOne({ email: customer.email });
-        if (user) {
-          userId = user._id.toString();
-          source = 'stripe.customer.email';
-          console.log('✅ resolveUserIdFromCheckout: Found userId from Stripe customer email', {
-            userId,
-            source,
-            customerId: session.customer,
-            email: customer.email
-          });
-        }
-      }
-    } catch (err) {
-      console.warn('⚠️ resolveUserIdFromCheckout: Could not retrieve Stripe customer:', err.message);
-    }
-  }
+          // Priority 1: session.metadata.userId (PRIMARY - set during checkout creation from req.userId)
+          if (session?.metadata?.userId) {
+            userId = session.metadata.userId;
+            source = 'session.metadata.userId';
+          }
+          // Priority 2: paymentIntent.metadata.userId (if payment intent provided)
+          else if (paymentIntent?.metadata?.userId) {
+            userId = paymentIntent.metadata.userId;
+            source = 'paymentIntent.metadata.userId';
+          }
+          // Priority 3: session.customer_email → find user by email
+          else if (session?.customer_email) {
+            user = await User.findOne({ email: session.customer_email });
+            if (user) {
+              userId = user._id.toString();
+              source = 'session.customer_email';
+            }
+          }
+          // Priority 4: paymentIntent.receipt_email → find user by email
+          else if (paymentIntent?.receipt_email) {
+            user = await User.findOne({ email: paymentIntent.receipt_email });
+            if (user) {
+              userId = user._id.toString();
+              source = 'paymentIntent.receipt_email';
+            }
+          }
+          // Priority 5: Stripe customer email → find user by email
+          else if (session?.customer && stripe) {
+            try {
+              const customer = await stripe.customers.retrieve(session.customer);
+              if (customer?.email) {
+                user = await User.findOne({ email: customer.email });
+                if (user) {
+                  userId = user._id.toString();
+                  source = 'stripe.customer.email';
+                }
+              }
+            } catch (err) {
+              // Silent fail
+            }
+          }
 
   // If we found userId but don't have user object, fetch it
   if (userId && !user) {
@@ -169,36 +141,16 @@ const resolveUserIdFromCheckout = async (session, paymentIntent = null, stripe =
       user = await User.findById(userId);
       if (!user) {
         // If not found, try to find by email as fallback
-        console.warn('⚠️ resolveUserIdFromCheckout: User not found by ID, trying email fallback...', {
-          userId,
-          source
-        });
         // If we have email from session, try that
         if (session?.customer_email) {
           user = await User.findOne({ email: session.customer_email });
           if (user) {
-            console.log('✅ resolveUserIdFromCheckout: Found user by email fallback after ID lookup failed', {
-              userId: user._id.toString(),
-              email: session.customer_email,
-              originalUserId: userId
-            });
             userId = user._id.toString();
             source = source + ' → email_fallback';
           }
         }
-      } else {
-        console.log('✅ resolveUserIdFromCheckout: Successfully fetched user by ID', {
-          userId: user._id.toString(),
-          email: user.email,
-          source
-        });
       }
     } catch (err) {
-      console.error('❌ resolveUserIdFromCheckout: Error fetching user by ID:', {
-        error: err.message,
-        userId,
-        source
-      });
       user = null;
     }
   }
@@ -748,49 +700,43 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       },
     ];
 
-    // Prepare metadata (different for custom packages vs regular packages vs direct product purchase)
+    // Prepare metadata - ONLY essential data for transaction creation
+    // Keep it minimal: userId, productId, packageId, and essential flags only
     const metadata = {
       userId: req.userId.toString(),
       productId: productId ? productId.toString() : '',
-      packageName: packageName,
       uniqueCode: uniqueCode || '',
       billingType: billingType || 'one_time',
       directProductPurchase: directProductPurchase ? 'true' : 'false',
-      seatLimit: seatLimit.toString(),
-      urlType: urlType || '', // Store urlType for transaction type determination
     };
     
-    // Add shop page purchase flag and package type to metadata if provided
-    if (isShopPagePurchase) {
-      metadata.shopPagePurchase = 'true';
-      metadata.packageType = requestedPackageType;
-      metadata.maxSeats = seatLimit.toString();
-    }
-    
-    // Add package type and max seats for Products page purchases (not shop page)
-    // This ensures unique code generation and transaction creation work correctly for Products page
-    if (directProductPurchase && !isShopPagePurchase && requestedPackageType) {
-      metadata.packageType = requestedPackageType;
-      metadata.maxSeats = seatLimit.toString();
-    }
-    
-    // Also store referrer URL if available from request headers (for shop page detection)
-    const referrerUrl = req.headers.referer || req.headers.referrer || null;
-    if (referrerUrl) {
-      metadata.referrerUrl = referrerUrl;
-    }
-    
-    // Only add packageId to metadata if it exists AND it's not a direct product purchase
-    // For direct product purchases, packageId should NOT be sent
+    // Only add packageId if it exists AND it's not a direct product purchase
     if (packageId && !directProductPurchase) {
       metadata.packageId = packageId.toString();
     }
     
-    // Only add customPackageId to metadata if it exists
+    // Only add customPackageId if it exists
     if (customPackageId) {
       metadata.customPackageId = customPackageId.toString();
     }
+    
+    // Add package type and seat limit ONLY for direct product purchases (needed for transaction creation)
+    if (directProductPurchase) {
+      metadata.packageType = requestedPackageType || 'digital';
+      metadata.seatLimit = seatLimit.toString();
+      // Add shop page flag only if it's a shop page purchase
+      if (isShopPagePurchase) {
+        metadata.shopPagePurchase = 'true';
+      }
+    }
+    
+    // Add urlType ONLY if needed for transaction type determination
+    if (urlType) {
+      metadata.urlType = urlType;
+    }
 
+    // Log metadata being sent to Stripe
+    console.log('📋 Metadata for Stripe Checkout Session:', metadata);
 
     // Create Stripe Checkout Session
     const session = await stripe.checkout.sessions.create({
@@ -1051,23 +997,12 @@ router.post('/webhook', async (req, res) => {
         
         const { userId, source, user } = await resolveUserIdFromCheckout(session, paymentIntent, stripe);
         
-        console.log('🔍 resolveUserIdFromCheckout result (WEBHOOK):', {
-          userId,
-          source,
-          hasUser: !!user,
-          sessionId: session.id,
-          paymentIntentId: session.payment_intent
-        });
-        
         if (!userId || !user) {
           console.error('❌ Cannot create transaction: userId missing and user not found by any method');
-          console.error('❌ Full session object:', JSON.stringify(session, null, 2));
-          // Return 200 to prevent Stripe retries, but log the error
           return res.status(200).json({ 
             received: true, 
             error: 'User not found - userId missing in metadata',
-            sessionId: session.id,
-            source: source
+            sessionId: session.id
           });
         }
         
@@ -1084,26 +1019,11 @@ router.post('/webhook', async (req, res) => {
         const directProductPurchase = session.metadata?.directProductPurchase === 'true';
         const seatLimit = directProductPurchase ? 1 : (parseInt(session.metadata?.seatLimit) || 5);
         
-        // Log extracted metadata for debugging
-        console.log('🔍 Extracted metadata from session (WEBHOOK):', {
-          productId,
-          productIdType: typeof productId,
-          directProductPurchase,
-          packageId,
-          customPackageId,
-          sessionId: session.id
-        });
+        // Log metadata received from webhook
+        console.log('📋 Metadata received from webhook:', session.metadata);
         
         // Purchase date is when the transaction is created (now)
         const purchaseDate = new Date();
-
-        console.log('🔍 User data for transaction (WEBHOOK):', {
-          userId: user._id,
-          source: source,
-          schoolId: user.schoolId,
-          organizationId: user.organizationId,
-          email: user.email
-        });
 
         let package = null;
         let customPackage = null;
@@ -1127,10 +1047,6 @@ router.post('/webhook', async (req, res) => {
           }
 
           // Extract productId from productIds array (use first productId)
-          console.log(`🔍 Custom package productIds:`, customPackage.productIds);
-          console.log(`🔍 Custom package productIds type:`, typeof customPackage.productIds);
-          console.log(`🔍 Custom package productIds is array:`, Array.isArray(customPackage.productIds));
-          console.log(`🔍 Custom package productIds length:`, customPackage.productIds?.length || 0);
           
           if (customPackage.productIds && Array.isArray(customPackage.productIds) && customPackage.productIds.length > 0) {
             const firstProduct = customPackage.productIds[0];
@@ -1304,76 +1220,38 @@ router.post('/webhook', async (req, res) => {
           // CRITICAL: productId might be string or ObjectId, handle both
           let product = null;
           try {
-            // FIRST: Get all products to debug and verify connection
-            const allProductsDebug = await Product.find({}).select('_id title name').limit(10);
-            const productIds = allProductsDebug.map(p => p._id.toString());
-            console.log('🔍 DEBUG: All products in DB (checkout.session.completed):', {
-              count: allProductsDebug.length,
-              ids: productIds,
-              searchingFor: productId,
-              productIdTrimmed: productId?.trim(),
-              productIdInList: productIds.includes(productId?.trim() || productId)
-            });
-            
             // Trim productId in case of whitespace
             const trimmedProductId = (productId || '').trim();
             
-            // Convert productId to ObjectId if it's a string
-            let productIdToSearch = trimmedProductId;
-            if (typeof trimmedProductId === 'string' && mongoose.Types.ObjectId.isValid(trimmedProductId)) {
-              productIdToSearch = new mongoose.Types.ObjectId(trimmedProductId);
-            }
-            
-            // Try multiple methods to find product
-            // Method 1: findById with ObjectId
+            // Try to find product by ID
             if (mongoose.Types.ObjectId.isValid(trimmedProductId)) {
               product = await Product.findById(new mongoose.Types.ObjectId(trimmedProductId));
-              console.log('🔍 Method 1 (findById ObjectId):', product ? '✅ Found' : '❌ Not found');
             }
-            
-            // Method 2: findById with string
             if (!product) {
               product = await Product.findById(trimmedProductId);
-              console.log('🔍 Method 2 (findById string):', product ? '✅ Found' : '❌ Not found');
             }
-            
-            // Method 3: findOne with _id string
             if (!product) {
               product = await Product.findOne({ _id: trimmedProductId });
-              console.log('🔍 Method 3 (findOne _id string):', product ? '✅ Found' : '❌ Not found');
             }
-            
-            // Method 4: findOne with _id ObjectId
             if (!product && mongoose.Types.ObjectId.isValid(trimmedProductId)) {
               product = await Product.findOne({ _id: new mongoose.Types.ObjectId(trimmedProductId) });
-              console.log('🔍 Method 4 (findOne _id ObjectId):', product ? '✅ Found' : '❌ Not found');
             }
             
-            // Method 5: If productId is in the list, try direct match
-            if (!product && productIds.includes(trimmedProductId)) {
-              console.log('⚠️ Product ID exists in list, trying direct findOne...');
-              product = await Product.findOne({ _id: trimmedProductId });
-              if (!product) {
-                product = await Product.findOne({ _id: new mongoose.Types.ObjectId(trimmedProductId) });
+            // If product not found by ID, try to find by packageName from metadata (fallback)
+            if (!product && session.metadata?.packageName) {
+              product = await Product.findOne({ 
+                $or: [
+                  { title: session.metadata.packageName },
+                  { name: session.metadata.packageName }
+                ]
+              });
+              if (product) {
+                productId = product._id.toString();
               }
-              console.log('🔍 Method 5 (direct match):', product ? '✅ Found' : '❌ Not found');
             }
             
             if (!product) {
-              // Log detailed error for debugging
-              console.error('❌ Product not found for direct purchase:', {
-                productId: trimmedProductId,
-                productIdType: typeof trimmedProductId,
-                productIdLength: trimmedProductId?.length,
-                isValidObjectId: mongoose.Types.ObjectId.isValid(trimmedProductId),
-                sessionId: session.id,
-                metadata: session.metadata,
-                allProductsCount: await Product.countDocuments(),
-                allProductIds: productIds,
-                searchingFor: trimmedProductId,
-                productIdInList: productIds.includes(trimmedProductId)
-              });
-              return res.json({ received: true, error: 'Product not found', productId: trimmedProductId, availableIds: productIds });
+              // Continue without product - transaction will be created with productId from metadata
             }
             console.log('✅ Product found for direct purchase:', {
               productId: product._id,
@@ -2105,13 +1983,7 @@ router.post('/webhook', async (req, res) => {
       // This ensures webhook behaves identically to transaction-by-session endpoint
       const { userId, source, user } = await resolveUserIdFromCheckout(session, paymentIntent, stripe);
       
-      console.log('🔍 resolveUserIdFromCheckout result (payment_intent.succeeded WEBHOOK):', {
-        userId,
-        source,
-        hasUser: !!user,
-        paymentIntentId: paymentIntent.id,
-        sessionId: session?.id
-      });
+      // User resolved, continue with transaction creation
       
       if (!userId || !user) {
         console.error('❌ Cannot create transaction: userId missing and user not found by any method');
@@ -2131,14 +2003,6 @@ router.post('/webhook', async (req, res) => {
         const directProductPurchase = (sessionMetadata?.directProductPurchase === 'true') || (paymentIntent.metadata?.directProductPurchase === 'true');
         const seatLimit = directProductPurchase ? 1 : (parseInt(sessionMetadata?.seatLimit || paymentIntent.metadata?.seatLimit) || 5);
 
-        // User already fetched by resolveUserIdFromCheckout
-        console.log('🔍 User data for transaction (payment_intent WEBHOOK):', {
-          userId: user._id,
-          source: source,
-          schoolId: user.schoolId,
-          organizationId: user.organizationId,
-          email: user.email
-        });
         // Handle direct product purchases (no package required)
         if (directProductPurchase && productId) {
           const Product = require('../models/Product');
@@ -2147,84 +2011,36 @@ router.post('/webhook', async (req, res) => {
           // CRITICAL: productId might be string or ObjectId, handle both
           let product = null;
           try {
-            // FIRST: Get all products to debug and verify connection
-            const allProductsDebug = await Product.find({}).select('_id title name').limit(10);
-            const productIds = allProductsDebug.map(p => p._id.toString());
-            console.log('🔍 DEBUG: All products in DB (payment_intent.succeeded):', {
-              count: allProductsDebug.length,
-              ids: productIds,
-              searchingFor: productId,
-              productIdTrimmed: productId?.trim(),
-              productIdInList: productIds.includes(productId?.trim() || productId)
-            });
-            
             // Trim productId in case of whitespace
             const trimmedProductId = (productId || '').trim();
             
-            // Convert productId to ObjectId if it's a string
-            let productIdToSearch = trimmedProductId;
-            if (typeof trimmedProductId === 'string' && mongoose.Types.ObjectId.isValid(trimmedProductId)) {
-              productIdToSearch = new mongoose.Types.ObjectId(trimmedProductId);
-            }
-            
-            // Try multiple methods to find product
-            // Method 1: findById with ObjectId
+            // Try to find product by ID first
             if (mongoose.Types.ObjectId.isValid(trimmedProductId)) {
               product = await Product.findById(new mongoose.Types.ObjectId(trimmedProductId));
-              console.log('🔍 Method 1 (findById ObjectId):', product ? '✅ Found' : '❌ Not found');
             }
-            
-            // Method 2: findById with string
             if (!product) {
               product = await Product.findById(trimmedProductId);
-              console.log('🔍 Method 2 (findById string):', product ? '✅ Found' : '❌ Not found');
             }
-            
-            // Method 3: findOne with _id string
             if (!product) {
               product = await Product.findOne({ _id: trimmedProductId });
-              console.log('🔍 Method 3 (findOne _id string):', product ? '✅ Found' : '❌ Not found');
             }
-            
-            // Method 4: findOne with _id ObjectId
             if (!product && mongoose.Types.ObjectId.isValid(trimmedProductId)) {
               product = await Product.findOne({ _id: new mongoose.Types.ObjectId(trimmedProductId) });
-              console.log('🔍 Method 4 (findOne _id ObjectId):', product ? '✅ Found' : '❌ Not found');
             }
             
-            // Method 5: If productId is in the list, try direct match
-            if (!product && productIds.includes(trimmedProductId)) {
-              console.log('⚠️ Product ID exists in list, trying direct findOne...');
-              product = await Product.findOne({ _id: trimmedProductId });
-              if (!product) {
-                product = await Product.findOne({ _id: new mongoose.Types.ObjectId(trimmedProductId) });
-              }
-              console.log('🔍 Method 5 (direct match):', product ? '✅ Found' : '❌ Not found');
-            }
-            
-            if (!product) {
-              // Log detailed error for debugging
-              console.error('❌ Product not found for direct purchase (payment_intent):', {
-                productId: trimmedProductId,
-                productIdType: typeof trimmedProductId,
-                productIdLength: trimmedProductId?.length,
-                isValidObjectId: mongoose.Types.ObjectId.isValid(trimmedProductId),
-                paymentIntentId: paymentIntent.id,
-                sessionMetadata: sessionMetadata,
-                paymentIntentMetadata: paymentIntent.metadata,
-                allProductsCount: await Product.countDocuments(),
-                allProductIds: productIds,
-                searchingFor: trimmedProductId,
-                productIdInList: productIds.includes(trimmedProductId)
+            // If product not found by ID, try to find by packageName from metadata (fallback)
+            if (!product && (sessionMetadata?.packageName || paymentIntent.metadata?.packageName)) {
+              const packageName = sessionMetadata?.packageName || paymentIntent.metadata?.packageName;
+              product = await Product.findOne({ 
+                $or: [
+                  { title: packageName },
+                  { name: packageName }
+                ]
               });
-              return res.status(200).json({ received: true, error: 'Product not found', productId: trimmedProductId, availableIds: productIds });
+              if (product) {
+                productId = product._id.toString();
+              }
             }
-            console.log('✅ Product found for direct purchase (payment_intent):', {
-              productId: product._id,
-              productName: product.title || product.name,
-              productPrice: product.price,
-              paymentIntentId: paymentIntent.id
-            });
           } catch (err) {
             console.error('❌ Error finding product (payment_intent):', {
               error: err.message,
