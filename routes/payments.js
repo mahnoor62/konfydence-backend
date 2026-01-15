@@ -1045,11 +1045,25 @@ router.post('/webhook', async (req, res) => {
         // Extract metadata (same as fallback flow)
         const packageId = session.metadata?.packageId || null;
         const customPackageId = session.metadata?.customPackageId || null;
-        let productId = session.metadata?.productId || null;
+        // CRITICAL: productId might be empty string, handle it properly
+        let productId = session.metadata?.productId;
+        if (productId === '' || productId === 'null' || productId === 'undefined') {
+          productId = null;
+        }
         let uniqueCode = session.metadata?.uniqueCode || null;
         const billingType = session.metadata?.billingType || 'one_time';
         const directProductPurchase = session.metadata?.directProductPurchase === 'true';
         const seatLimit = directProductPurchase ? 1 : (parseInt(session.metadata?.seatLimit) || 5);
+        
+        // Log extracted metadata for debugging
+        console.log('🔍 Extracted metadata from session (WEBHOOK):', {
+          productId,
+          productIdType: typeof productId,
+          directProductPurchase,
+          packageId,
+          customPackageId,
+          sessionId: session.id
+        });
         
         // Purchase date is when the transaction is created (now)
         const purchaseDate = new Date();
@@ -1256,11 +1270,39 @@ router.post('/webhook', async (req, res) => {
         } else if (directProductPurchase && productId) {
           // Handle direct product purchase (for physical products)
           const Product = require('../models/Product');
-          const product = await Product.findById(productId);
           
-          if (!product) {
-            console.error('Product not found for direct purchase:', productId);
-            return res.json({ received: true, error: 'Product not found' });
+          // CRITICAL: productId might be string or ObjectId, handle both
+          let product = null;
+          try {
+            // Try to find by ID (handles both string and ObjectId)
+            product = await Product.findById(productId);
+            if (!product) {
+              // If not found, try to find by _id as string
+              product = await Product.findOne({ _id: productId });
+            }
+            if (!product) {
+              // Log detailed error for debugging
+              console.error('❌ Product not found for direct purchase:', {
+                productId,
+                productIdType: typeof productId,
+                productIdLength: productId?.length,
+                sessionId: session.id,
+                metadata: session.metadata
+              });
+              return res.json({ received: true, error: 'Product not found', productId });
+            }
+            console.log('✅ Product found for direct purchase:', {
+              productId: product._id,
+              productName: product.title || product.name,
+              sessionId: session.id
+            });
+          } catch (err) {
+            console.error('❌ Error finding product:', {
+              error: err.message,
+              productId,
+              productIdType: typeof productId
+            });
+            return res.json({ received: true, error: 'Error finding product', productId });
           }
           
           // Determine transaction type based on urlType from session metadata
@@ -2014,11 +2056,40 @@ router.post('/webhook', async (req, res) => {
         // Handle direct product purchases (no package required)
         if (directProductPurchase && productId) {
           const Product = require('../models/Product');
-          const product = await Product.findById(productId);
           
-          if (!product) {
-            console.error('Product not found for direct purchase:', productId);
-            return res.status(200).json({ received: true, error: 'Product not found' });
+          // CRITICAL: productId might be string or ObjectId, handle both
+          let product = null;
+          try {
+            // Try to find by ID (handles both string and ObjectId)
+            product = await Product.findById(productId);
+            if (!product) {
+              // If not found, try to find by _id as string
+              product = await Product.findOne({ _id: productId });
+            }
+            if (!product) {
+              // Log detailed error for debugging
+              console.error('❌ Product not found for direct purchase (payment_intent):', {
+                productId,
+                productIdType: typeof productId,
+                productIdLength: productId?.length,
+                paymentIntentId: paymentIntent.id,
+                sessionMetadata: sessionMetadata,
+                paymentIntentMetadata: paymentIntent.metadata
+              });
+              return res.status(200).json({ received: true, error: 'Product not found', productId });
+            }
+            console.log('✅ Product found for direct purchase (payment_intent):', {
+              productId: product._id,
+              productName: product.title || product.name,
+              paymentIntentId: paymentIntent.id
+            });
+          } catch (err) {
+            console.error('❌ Error finding product (payment_intent):', {
+              error: err.message,
+              productId,
+              productIdType: typeof productId
+            });
+            return res.status(200).json({ received: true, error: 'Error finding product', productId });
           }
           
           // Determine transaction type from urlType or user role
