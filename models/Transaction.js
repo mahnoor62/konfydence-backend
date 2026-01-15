@@ -68,6 +68,18 @@ const TransactionSchema = new Schema(
       sparse: true,
       index: true
     },
+    webhookData: {
+      type: Schema.Types.Mixed,
+      default: null
+    },
+    webhookEventType: {
+      type: String,
+      default: null
+    },
+    webhookReceivedAt: {
+      type: Date,
+      default: null
+    },
     contractPeriod: {
       startDate: {
         type: Date

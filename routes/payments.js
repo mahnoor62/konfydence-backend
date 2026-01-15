@@ -746,6 +746,27 @@ router.post('/webhook', async (req, res) => {
   }
 
   try {
+    // Store complete webhook event data
+    const webhookEventData = {
+      id: event.id,
+      type: event.type,
+      created: event.created,
+      livemode: event.livemode,
+      api_version: event.api_version,
+      data: event.data,
+      object: event.data?.object || null,
+      request: event.request || null,
+      pending_webhooks: event.pending_webhooks || null,
+      received_at: new Date()
+    };
+
+    console.log('📥 Webhook Event Received:', {
+      type: event.type,
+      id: event.id,
+      livemode: event.livemode,
+      created: new Date(event.created * 1000)
+    });
+
     // Handle Stripe Checkout Session completed
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
@@ -1332,6 +1353,17 @@ router.post('/webhook', async (req, res) => {
               ? new Date(purchaseDate.getTime() + 365 * 24 * 60 * 60 * 1000)
               : null),
           },
+          // Store complete webhook event data
+          webhookData: webhookEventData,
+          webhookEventType: event.type,
+          webhookReceivedAt: new Date(),
+        });
+
+        console.log('✅ Transaction created via webhook with webhook data:', {
+          transactionId: transaction._id,
+          webhookEventType: event.type,
+          webhookEventId: event.id,
+          stripePaymentIntentId: transaction.stripePaymentIntentId
         });
 
         // Update GameProgress isDemo to false when user makes a purchase
@@ -1664,6 +1696,17 @@ router.post('/webhook', async (req, res) => {
                   : null;
               })(),
             },
+            // Store complete webhook event data
+            webhookData: webhookEventData,
+            webhookEventType: event.type,
+            webhookReceivedAt: new Date(),
+          });
+
+          console.log('✅ Transaction created via webhook (payment_intent.succeeded) with webhook data:', {
+            transactionId: transaction._id,
+            webhookEventType: event.type,
+            webhookEventId: event.id,
+            stripePaymentIntentId: transaction.stripePaymentIntentId
           });
 
           // Determine membership type based on package targetAudiences or product targetAudience
@@ -1796,10 +1839,22 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
-    res.json({ received: true });
+    // Return success response to Stripe
+    res.json({ received: true, processed: true });
+    
+    console.log('✅ Webhook processed successfully:', {
+      eventType: event.type,
+      eventId: event.id,
+      processedAt: new Date()
+    });
   } catch (error) {
-    console.error('Error processing webhook:', error);
-    res.status(500).json({ error: 'Webhook processing failed' });
+    console.error('❌ Error processing webhook:', {
+      error: error.message,
+      stack: error.stack,
+      eventType: event?.type,
+      eventId: event?.id
+    });
+    res.status(500).json({ error: 'Webhook processing failed', message: error.message });
   }
 });
 
