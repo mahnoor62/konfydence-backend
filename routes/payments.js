@@ -715,6 +715,19 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
 
 // Stripe webhook handler (raw body is handled in server.js before json parser)
 router.post('/webhook', async (req, res) => {
+  console.log('🔔 WEBHOOK ENDPOINT CALLED:', {
+    timestamp: new Date().toISOString(),
+    method: req.method,
+    url: req.url,
+    hasBody: !!req.body,
+    bodyType: typeof req.body,
+    bodyLength: req.body ? (typeof req.body === 'string' ? req.body.length : JSON.stringify(req.body).length) : 0,
+    headers: {
+      'stripe-signature': req.headers['stripe-signature'] ? 'present' : 'missing',
+      'content-type': req.headers['content-type']
+    }
+  });
+
   if (!isStripeConfigured()) {
     console.warn('⚠️ Stripe is not configured. Webhook ignored.');
     return res.status(200).json({ received: true, message: 'Stripe not configured' });
@@ -722,6 +735,13 @@ router.post('/webhook', async (req, res) => {
 
   const sig = req.headers['stripe-signature'];
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  console.log('🔍 Webhook Configuration Check:', {
+    hasStripe: !!stripe,
+    hasWebhookSecret: !!webhookSecret,
+    hasSignature: !!sig,
+    webhookSecretLength: webhookSecret ? webhookSecret.length : 0
+  });
 
   if (!webhookSecret) {
     console.warn('⚠️ STRIPE_WEBHOOK_SECRET not configured. Webhook verification skipped.');
@@ -741,7 +761,13 @@ router.post('/webhook', async (req, res) => {
       event = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body.toString ? JSON.parse(req.body.toString()) : req.body);
     }
   } catch (err) {
-    console.error('Webhook signature verification failed:', err.message);
+    console.error('❌ Webhook signature verification failed:', {
+      error: err.message,
+      stack: err.stack,
+      hasWebhookSecret: !!webhookSecret,
+      hasSignature: !!sig,
+      bodyPreview: typeof req.body === 'string' ? req.body.substring(0, 200) : JSON.stringify(req.body).substring(0, 200)
+    });
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
@@ -1979,6 +2005,16 @@ router.get('/transaction/:code', authenticateToken, async (req, res) => {
     console.error('Error fetching transaction:', error);
     res.status(500).json({ error: 'Server error' });
   }
+});
+
+// Test webhook endpoint (GET) - to verify endpoint is accessible
+router.get('/webhook', (req, res) => {
+  res.json({ 
+    message: 'Webhook endpoint is accessible',
+    timestamp: new Date().toISOString(),
+    method: 'GET',
+    note: 'Stripe will POST to this endpoint, not GET'
+  });
 });
 
 // Get transaction by checkout session ID (with fallback to create if payment succeeded)
