@@ -850,14 +850,47 @@ router.post('/webhook', async (req, res) => {
 
         // Only create transaction if it doesn't exist (prevent duplicates)
       if (!transaction) {
-        const userId = session.metadata.userId;
-        const packageId = session.metadata.packageId || null;
-        const customPackageId = session.metadata.customPackageId || null;
-        let productId = session.metadata.productId || null; // Use let instead of const to allow updating
-        let uniqueCode = session.metadata.uniqueCode || null;
-        const billingType = session.metadata.billingType || 'one_time';
-        const directProductPurchase = session.metadata.directProductPurchase === 'true';
-        const seatLimit = directProductPurchase ? 1 : (parseInt(session.metadata.seatLimit) || 5); // Default 1 for direct product purchase
+        let userId = session.metadata?.userId;
+        const packageId = session.metadata?.packageId || null;
+        const customPackageId = session.metadata?.customPackageId || null;
+        let productId = session.metadata?.productId || null; // Use let instead of const to allow updating
+        let uniqueCode = session.metadata?.uniqueCode || null;
+        const billingType = session.metadata?.billingType || 'one_time';
+        const directProductPurchase = session.metadata?.directProductPurchase === 'true';
+        const seatLimit = directProductPurchase ? 1 : (parseInt(session.metadata?.seatLimit) || 5); // Default 1 for direct product purchase
+        
+        // CRITICAL: Check if userId exists in metadata, if not try to find by email
+        if (!userId) {
+          console.error('❌ CRITICAL: userId missing in webhook session metadata:', {
+            sessionId: session.id,
+            paymentIntentId: session.payment_intent,
+            metadata: session.metadata,
+            customerEmail: session.customer_email,
+            customer: session.customer
+          });
+          
+          // Try to find user by customer email as fallback
+          if (session.customer_email) {
+            const userByEmail = await User.findOne({ email: session.customer_email });
+            if (userByEmail) {
+              userId = userByEmail._id.toString();
+              console.log('✅ Found user by email fallback:', {
+                userId: userId,
+                email: session.customer_email
+              });
+            }
+          }
+          
+          if (!userId) {
+            console.error('❌ Cannot create transaction: userId missing and user not found by email');
+            // Return 200 to prevent Stripe retries, but log the error
+            return res.status(200).json({ 
+              received: true, 
+              error: 'User not found - userId missing in metadata',
+              sessionId: session.id
+            });
+          }
+        }
         
         // Purchase date is when the transaction is created (now)
         const purchaseDate = new Date();
@@ -873,7 +906,7 @@ router.post('/webhook', async (req, res) => {
 
         if (!user) {
           console.error('User not found for checkout session:', session.id);
-          return res.json({ received: true, error: 'User not found' });
+          return res.status(200).json({ received: true, error: 'User not found' });
         }
 
         let package = null;

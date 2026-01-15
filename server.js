@@ -68,7 +68,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 // CRITICAL: Stripe webhook needs raw body - MUST be before express.json()
-// Route path only, NO full URL
+// Route path only, NO full URL - Express routes don't use full URLs!
 app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
 
 // JSON parser - applied to all other routes
