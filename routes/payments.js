@@ -995,10 +995,43 @@ router.post('/webhook', async (req, res) => {
           }
         }
         
-        const { userId, source, user } = await resolveUserIdFromCheckout(session, paymentIntent, stripe);
+        // CRITICAL FIX: Get userId from metadata first, then fetch user
+        let userId = session.metadata?.userId || null;
+        let user = null;
+        
+        if (userId) {
+          try {
+            const mongoose = require('mongoose');
+            // Try to find user by ID - handle both string and ObjectId
+            if (mongoose.Types.ObjectId.isValid(userId)) {
+              user = await User.findById(userId);
+            }
+            if (!user && session?.customer_email) {
+              // Fallback to email if ID lookup fails
+              user = await User.findOne({ email: session.customer_email });
+              if (user) {
+                userId = user._id.toString();
+              }
+            }
+          } catch (err) {
+            console.error('❌ Error fetching user:', err.message);
+          }
+        }
+        
+        // If still no user, try email lookup
+        if (!user && session?.customer_email) {
+          user = await User.findOne({ email: session.customer_email });
+          if (user) {
+            userId = user._id.toString();
+          }
+        }
         
         if (!userId || !user) {
-          console.error('❌ Cannot create transaction: userId missing and user not found by any method');
+          console.error('❌ Cannot create transaction: userId missing and user not found by any method', {
+            userIdFromMetadata: session.metadata?.userId,
+            customerEmail: session.customer_email,
+            sessionId: session.id
+          });
           return res.status(200).json({ 
             received: true, 
             error: 'User not found - userId missing in metadata',
@@ -1979,19 +2012,47 @@ router.post('/webhook', async (req, res) => {
         }
       }
 
-      // CRITICAL: Use SAME userId resolution logic as fallback flow
-      // This ensures webhook behaves identically to transaction-by-session endpoint
-      const { userId, source, user } = await resolveUserIdFromCheckout(session, paymentIntent, stripe);
+      // CRITICAL FIX: Get userId from metadata first, then fetch user
+      let userId = sessionMetadata?.userId || paymentIntent.metadata?.userId || null;
+      let user = null;
       
-      // User resolved, continue with transaction creation
+      if (userId) {
+        try {
+          const mongoose = require('mongoose');
+          // Try to find user by ID - handle both string and ObjectId
+          if (mongoose.Types.ObjectId.isValid(userId)) {
+            user = await User.findById(userId);
+          }
+          if (!user && session?.customer_email) {
+            // Fallback to email if ID lookup fails
+            user = await User.findOne({ email: session.customer_email });
+            if (user) {
+              userId = user._id.toString();
+            }
+          }
+        } catch (err) {
+          console.error('❌ Error fetching user:', err.message);
+        }
+      }
+      
+      // If still no user, try email lookup
+      if (!user && session?.customer_email) {
+        user = await User.findOne({ email: session.customer_email });
+        if (user) {
+          userId = user._id.toString();
+        }
+      }
       
       if (!userId || !user) {
-        console.error('❌ Cannot create transaction: userId missing and user not found by any method');
+        console.error('❌ Cannot create transaction: userId missing and user not found by any method', {
+          userIdFromMetadata: sessionMetadata?.userId || paymentIntent.metadata?.userId,
+          customerEmail: session?.customer_email,
+          paymentIntentId: paymentIntent.id
+        });
         return res.status(200).json({ 
           received: true, 
           error: 'User not found - userId missing in metadata',
-          paymentIntentId: paymentIntent.id,
-          source: source
+          paymentIntentId: paymentIntent.id
         });
       }
 
