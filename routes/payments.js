@@ -164,7 +164,43 @@ const resolveUserIdFromCheckout = async (session, paymentIntent = null, stripe =
 
   // If we found userId but don't have user object, fetch it
   if (userId && !user) {
-    user = await User.findById(userId);
+    try {
+      // Try to find user by ID - handle both string and ObjectId
+      user = await User.findById(userId);
+      if (!user) {
+        // If not found, try to find by email as fallback
+        console.warn('⚠️ resolveUserIdFromCheckout: User not found by ID, trying email fallback...', {
+          userId,
+          source
+        });
+        // If we have email from session, try that
+        if (session?.customer_email) {
+          user = await User.findOne({ email: session.customer_email });
+          if (user) {
+            console.log('✅ resolveUserIdFromCheckout: Found user by email fallback after ID lookup failed', {
+              userId: user._id.toString(),
+              email: session.customer_email,
+              originalUserId: userId
+            });
+            userId = user._id.toString();
+            source = source + ' → email_fallback';
+          }
+        }
+      } else {
+        console.log('✅ resolveUserIdFromCheckout: Successfully fetched user by ID', {
+          userId: user._id.toString(),
+          email: user.email,
+          source
+        });
+      }
+    } catch (err) {
+      console.error('❌ resolveUserIdFromCheckout: Error fetching user by ID:', {
+        error: err.message,
+        userId,
+        source
+      });
+      user = null;
+    }
   }
 
   return { userId, source, user };
@@ -1514,7 +1550,8 @@ router.post('/webhook', async (req, res) => {
 
         // Get payment amount from session
         const amount = session.amount_total ? session.amount_total / 100 : session.amount_subtotal / 100;
-        const currency = session.currency?.toUpperCase() || 'USD';
+        // CRITICAL: Always use USD for transactions, not PKR or other currencies
+        const currency = 'USD';
 
         // Get organizationId or schoolId from custom package or user
         let organizationId = null;
@@ -2050,7 +2087,7 @@ router.post('/webhook', async (req, res) => {
             packageType: packageType,
             productId: productId,
             amount: paymentIntent.amount / 100,
-            currency: paymentIntent.currency.toUpperCase(),
+            currency: 'USD', // Always USD, not PKR or other currencies
             status: 'paid',
             paymentProvider: 'stripe',
             stripePaymentIntentId: paymentIntent.id,
@@ -2137,7 +2174,7 @@ router.post('/webhook', async (req, res) => {
             packageType: packageType,
             productId: productId || null,
             amount: paymentIntent.amount / 100,
-            currency: paymentIntent.currency.toUpperCase(),
+            currency: 'USD', // Always USD, not PKR or other currencies
             status: 'paid',
             paymentProvider: 'stripe',
             stripePaymentIntentId: paymentIntent.id,
@@ -2455,7 +2492,8 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
         if (shouldCreateTransaction) {
           // Get payment amount from session
           const amount = session.amount_total ? session.amount_total / 100 : session.amount_subtotal / 100;
-          const currency = session.currency?.toUpperCase() || 'USD';
+          // CRITICAL: Always use USD for transactions, not PKR or other currencies
+          const currency = 'USD';
 
           let transactionType = 'b2c_purchase';
           let packageType = 'standard';
