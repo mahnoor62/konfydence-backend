@@ -912,12 +912,15 @@ router.post('/webhook', async (req, res) => {
         
         essentialData.userEmail = session.customer_email || null;
         
-        // Get product price if product is provided
-        if (product && product.price) {
-          essentialData.productPrice = product.price;
-        } else if (session.amount_total) {
-          // Fallback to session amount if product not available
+        // CRITICAL: Use actual payment amount (session amount), not product price
+        // This ensures webhookData.productPrice matches transaction.amount
+        if (session.amount_total) {
           essentialData.productPrice = session.amount_total / 100;
+        } else if (session.amount_subtotal) {
+          essentialData.productPrice = session.amount_subtotal / 100;
+        } else if (product && product.price) {
+          // Fallback to product price only if session amount not available
+          essentialData.productPrice = product.price;
         }
       }
       
@@ -936,8 +939,13 @@ router.post('/webhook', async (req, res) => {
           
           essentialData.userEmail = paymentIntent.receipt_email || null;
           
+          // CRITICAL: Use actual payment amount (paymentIntent amount), not product price
+          // This ensures webhookData.productPrice matches transaction.amount
           if (paymentIntent.amount) {
             essentialData.productPrice = paymentIntent.amount / 100;
+          } else if (product && product.price) {
+            // Fallback to product price only if paymentIntent amount not available
+            essentialData.productPrice = product.price;
           }
         }
       }
@@ -948,10 +956,14 @@ router.post('/webhook', async (req, res) => {
         essentialData.userEmail = user.email || essentialData.userEmail;
       }
       
-      // Override with product data if available
+      // Override with product data if available (but NOT productPrice - keep payment amount)
       if (product) {
         essentialData.productId = product._id?.toString() || essentialData.productId;
-        essentialData.productPrice = product.price || essentialData.productPrice;
+        // DO NOT override productPrice with product.price - keep the actual payment amount
+        // Only set if not already set from session/paymentIntent
+        if (!essentialData.productPrice && product.price) {
+          essentialData.productPrice = product.price;
+        }
       }
       
       return essentialData;
