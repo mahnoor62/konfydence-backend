@@ -1270,15 +1270,32 @@ router.post('/webhook', async (req, res) => {
         } else if (directProductPurchase && productId) {
           // Handle direct product purchase (for physical products)
           const Product = require('../models/Product');
+          const mongoose = require('mongoose');
           
           // CRITICAL: productId might be string or ObjectId, handle both
           let product = null;
           try {
+            // Convert productId to ObjectId if it's a string
+            let productIdToSearch = productId;
+            if (typeof productId === 'string' && mongoose.Types.ObjectId.isValid(productId)) {
+              productIdToSearch = new mongoose.Types.ObjectId(productId);
+            }
+            
             // Try to find by ID (handles both string and ObjectId)
-            product = await Product.findById(productId);
+            product = await Product.findById(productIdToSearch);
             if (!product) {
-              // If not found, try to find by _id as string
+              // If not found, try with original productId (string format)
+              product = await Product.findById(productId);
+            }
+            if (!product) {
+              // Try findOne with _id
               product = await Product.findOne({ _id: productId });
+            }
+            if (!product) {
+              // Try findOne with ObjectId
+              if (mongoose.Types.ObjectId.isValid(productId)) {
+                product = await Product.findOne({ _id: new mongoose.Types.ObjectId(productId) });
+              }
             }
             if (!product) {
               // Log detailed error for debugging
@@ -1286,23 +1303,27 @@ router.post('/webhook', async (req, res) => {
                 productId,
                 productIdType: typeof productId,
                 productIdLength: productId?.length,
+                isValidObjectId: mongoose.Types.ObjectId.isValid(productId),
                 sessionId: session.id,
-                metadata: session.metadata
+                metadata: session.metadata,
+                allProductsCount: await Product.countDocuments()
               });
               return res.json({ received: true, error: 'Product not found', productId });
             }
             console.log('✅ Product found for direct purchase:', {
               productId: product._id,
               productName: product.title || product.name,
+              productPrice: product.price,
               sessionId: session.id
             });
           } catch (err) {
             console.error('❌ Error finding product:', {
               error: err.message,
+              stack: err.stack,
               productId,
               productIdType: typeof productId
             });
-            return res.json({ received: true, error: 'Error finding product', productId });
+            return res.json({ received: true, error: 'Error finding product', productId, errorMessage: err.message });
           }
           
           // Determine transaction type based on urlType from session metadata
@@ -2056,15 +2077,32 @@ router.post('/webhook', async (req, res) => {
         // Handle direct product purchases (no package required)
         if (directProductPurchase && productId) {
           const Product = require('../models/Product');
+          const mongoose = require('mongoose');
           
           // CRITICAL: productId might be string or ObjectId, handle both
           let product = null;
           try {
+            // Convert productId to ObjectId if it's a string
+            let productIdToSearch = productId;
+            if (typeof productId === 'string' && mongoose.Types.ObjectId.isValid(productId)) {
+              productIdToSearch = new mongoose.Types.ObjectId(productId);
+            }
+            
             // Try to find by ID (handles both string and ObjectId)
-            product = await Product.findById(productId);
+            product = await Product.findById(productIdToSearch);
             if (!product) {
-              // If not found, try to find by _id as string
+              // If not found, try with original productId (string format)
+              product = await Product.findById(productId);
+            }
+            if (!product) {
+              // Try findOne with _id
               product = await Product.findOne({ _id: productId });
+            }
+            if (!product) {
+              // Try findOne with ObjectId
+              if (mongoose.Types.ObjectId.isValid(productId)) {
+                product = await Product.findOne({ _id: new mongoose.Types.ObjectId(productId) });
+              }
             }
             if (!product) {
               // Log detailed error for debugging
@@ -2072,24 +2110,28 @@ router.post('/webhook', async (req, res) => {
                 productId,
                 productIdType: typeof productId,
                 productIdLength: productId?.length,
+                isValidObjectId: mongoose.Types.ObjectId.isValid(productId),
                 paymentIntentId: paymentIntent.id,
                 sessionMetadata: sessionMetadata,
-                paymentIntentMetadata: paymentIntent.metadata
+                paymentIntentMetadata: paymentIntent.metadata,
+                allProductsCount: await Product.countDocuments()
               });
               return res.status(200).json({ received: true, error: 'Product not found', productId });
             }
             console.log('✅ Product found for direct purchase (payment_intent):', {
               productId: product._id,
               productName: product.title || product.name,
+              productPrice: product.price,
               paymentIntentId: paymentIntent.id
             });
           } catch (err) {
             console.error('❌ Error finding product (payment_intent):', {
               error: err.message,
+              stack: err.stack,
               productId,
               productIdType: typeof productId
             });
-            return res.status(200).json({ received: true, error: 'Error finding product', productId });
+            return res.status(200).json({ received: true, error: 'Error finding product', productId, errorMessage: err.message });
           }
           
           // Determine transaction type from urlType or user role
