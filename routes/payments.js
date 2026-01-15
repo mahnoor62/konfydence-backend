@@ -1591,18 +1591,6 @@ router.post('/webhook', async (req, res) => {
           return res.json({ received: true, error: 'Package ID, Custom Package ID, or direct product purchase required' });
         }
 
-        // Check if user already has this package (prevent duplicate memberships) - only for regular packages
-        if (packageId && !customPackageId) {
-          const existingMembership = user.memberships.find(
-            (m) => m.packageId.toString() === packageId && m.status === 'active'
-          );
-
-          if (existingMembership) {
-            console.warn('User already has active membership for this package:', packageId);
-            return res.json({ received: true, warning: 'User already has membership' });
-          }
-        }
-
         // Get payment amount from session
         const amount = session.amount_total ? session.amount_total / 100 : session.amount_subtotal / 100;
         // CRITICAL: Always use USD for transactions, not PKR or other currencies
@@ -1715,39 +1703,60 @@ router.post('/webhook', async (req, res) => {
         }
 
         // Add membership to user (only for regular packages, not custom packages)
+        // Check if user already has this package (prevent duplicate memberships)
         if (packageId && !customPackageId) {
-          // Fetch product if productId is provided
-          let product = null;
-          if (productId) {
-            const Product = require('../models/Product');
-            product = await Product.findById(productId);
+          // Reload user to get latest memberships
+          user = await User.findById(userId);
+          
+          const existingMembership = user.memberships.find(
+            (m) => m.packageId.toString() === packageId && m.status === 'active'
+          );
+
+          if (existingMembership) {
+            console.warn('⚠️ User already has active membership for this package. Transaction created but membership not added:', {
+              packageId: packageId,
+              transactionId: transaction._id,
+              existingMembershipId: existingMembership._id
+            });
+          } else {
+            // Fetch product if productId is provided
+            let product = null;
+            if (productId) {
+              const Product = require('../models/Product');
+              product = await Product.findById(productId);
+            }
+
+            // Determine membership type based on package targetAudiences or product targetAudience
+            const membershipType = getMembershipType(package, product);
+            console.log('🔍 Membership Type Determination:', {
+              productId: productId,
+              productTargetAudience: product?.targetAudience,
+              packageTargetAudiences: package?.targetAudiences,
+              determinedMembershipType: membershipType
+            });
+
+            // Determine membership end date - use calculated expiry date from expiryTime or expiryDate
+            let membershipEndDate = transaction.contractPeriod.endDate;
+            const calculatedExpiryDate = calculateExpiryDate(package, transaction.contractPeriod.startDate);
+            if (calculatedExpiryDate) {
+              membershipEndDate = calculatedExpiryDate;
+            }
+
+            // Add membership to user
+            user.memberships.push({
+              packageId: packageId,
+              membershipType: membershipType,
+              status: 'active',
+              startDate: transaction.contractPeriod.startDate,
+              endDate: membershipEndDate,
+            });
+            await user.save();
+            console.log('✅ Membership added to user:', {
+              userId: userId,
+              packageId: packageId,
+              membershipType: membershipType
+            });
           }
-
-          // Determine membership type based on package targetAudiences or product targetAudience
-          const membershipType = getMembershipType(package, product);
-          console.log('🔍 Membership Type Determination:', {
-            productId: productId,
-            productTargetAudience: product?.targetAudience,
-            packageTargetAudiences: package?.targetAudiences,
-            determinedMembershipType: membershipType
-          });
-
-          // Determine membership end date - use calculated expiry date from expiryTime or expiryDate
-          let membershipEndDate = transaction.contractPeriod.endDate;
-          const calculatedExpiryDate = calculateExpiryDate(package, transaction.contractPeriod.startDate);
-          if (calculatedExpiryDate) {
-            membershipEndDate = calculatedExpiryDate;
-          }
-
-          // Add membership to user
-          user.memberships.push({
-            packageId: packageId,
-            membershipType: membershipType,
-            status: 'active',
-            startDate: transaction.contractPeriod.startDate,
-            endDate: membershipEndDate,
-          });
-          await user.save();
         }
 
         // Add transaction to organization/school's transactionIds array
@@ -1933,7 +1942,21 @@ router.post('/webhook', async (req, res) => {
           // Don't fail the transaction if email fails
         }
 
-        console.log('Transaction created and membership added for checkout session:', session.id);
+        console.log('✅ Transaction created and membership added for checkout session:', {
+          sessionId: session.id,
+          transactionId: transaction._id,
+          userId: userId,
+          packageId: packageId,
+          productId: productId
+        });
+        
+        // Return success response
+        return res.json({ 
+          received: true, 
+          processed: true,
+          transactionId: transaction._id,
+          sessionId: session.id
+        });
       } else {
         // Transaction already exists - update with webhook data if not already set
         if (transaction && (!transaction.webhookData || !transaction.webhookEventType)) {
