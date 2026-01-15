@@ -1398,6 +1398,17 @@ router.post('/webhook', async (req, res) => {
           webhookReceivedAt: new Date(),
         });
 
+        // Verify webhook data was saved
+        const savedTransaction = await Transaction.findById(transaction._id);
+        console.log('🔍 Webhook Data Verification:', {
+          transactionId: savedTransaction._id,
+          hasWebhookData: !!savedTransaction.webhookData,
+          webhookDataType: typeof savedTransaction.webhookData,
+          webhookEventType: savedTransaction.webhookEventType,
+          webhookReceivedAt: savedTransaction.webhookReceivedAt,
+          webhookDataKeys: savedTransaction.webhookData ? Object.keys(savedTransaction.webhookData) : 'null'
+        });
+
         console.log('✅ Transaction created via WEBHOOK (PRIMARY METHOD) with webhook data:', {
           transactionId: transaction._id,
           webhookEventType: event.type,
@@ -1990,8 +2001,10 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
       .populate('packageId', 'name')
       .populate('userId', 'name email');
 
-      // If transaction doesn't exist but payment is complete, create it (fallback for when webhook hasn't fired)
-      if (!transaction && session.payment_status === 'paid') {
+      // FALLBACK METHOD COMMENTED OUT - Only webhook creates transactions now
+    // If transaction doesn't exist but payment is complete, wait for webhook (don't create via fallback)
+    /*
+    if (!transaction && session.payment_status === 'paid') {
         const userId = session.metadata.userId;
         const packageId = session.metadata.packageId || null;
         const customPackageId = session.metadata.customPackageId || null;
@@ -2771,6 +2784,8 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
         }
       }
     }
+    */
+    // END OF FALLBACK METHOD - Transactions now only created via webhook
 
     if (!transaction) {
       // If still no transaction, return session info
