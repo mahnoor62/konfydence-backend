@@ -1973,23 +1973,26 @@ router.post('/webhook', async (req, res) => {
 
       // Try to get checkout session from payment intent metadata or retrieve it
       let session = null;
-      let sessionMetadata = paymentIntent.metadata || {};
+      let sessionMetadata = {};
       
-      // Try to retrieve checkout session if we have session ID in metadata
+      // CRITICAL: Try multiple methods to get checkout session and its metadata
+      // Method 1: Try to retrieve checkout session if we have session ID in metadata
       if (paymentIntent.metadata?.checkout_session_id) {
         try {
           session = await stripe.checkout.sessions.retrieve(paymentIntent.metadata.checkout_session_id);
           sessionMetadata = session.metadata || {};
           console.log('✅ Retrieved checkout session from payment intent metadata:', {
             sessionId: session.id,
-            paymentIntentId: paymentIntent.id
+            paymentIntentId: paymentIntent.id,
+            hasMetadata: !!session.metadata,
+            metadataKeys: session.metadata ? Object.keys(session.metadata) : []
           });
         } catch (err) {
-          console.warn('⚠️ Could not retrieve checkout session:', err.message);
+          console.warn('⚠️ Could not retrieve checkout session from metadata:', err.message);
         }
       }
       
-      // If no session, try to find by payment intent ID in checkout sessions
+      // Method 2: Try to find by payment intent ID in checkout sessions
       if (!session) {
         try {
           const sessions = await stripe.checkout.sessions.list({
@@ -2001,24 +2004,62 @@ router.post('/webhook', async (req, res) => {
             sessionMetadata = session.metadata || {};
             console.log('✅ Found checkout session by payment intent ID:', {
               sessionId: session.id,
-              paymentIntentId: paymentIntent.id
+              paymentIntentId: paymentIntent.id,
+              hasMetadata: !!session.metadata,
+              metadataKeys: session.metadata ? Object.keys(session.metadata) : []
             });
           }
         } catch (err) {
           console.warn('⚠️ Could not find checkout session by payment intent:', err.message);
         }
       }
+      
+      // Method 3: Try to get session from paymentIntent's latest_charge
+      if (!session && paymentIntent.latest_charge) {
+        try {
+          const charge = await stripe.charges.retrieve(paymentIntent.latest_charge);
+          if (charge.payment_intent) {
+            const sessions = await stripe.checkout.sessions.list({
+              payment_intent: charge.payment_intent,
+              limit: 1
+            });
+            if (sessions.data && sessions.data.length > 0) {
+              session = sessions.data[0];
+              sessionMetadata = session.metadata || {};
+              console.log('✅ Found checkout session via charge:', {
+                sessionId: session.id,
+                paymentIntentId: paymentIntent.id
+              });
+            }
+          }
+        } catch (err) {
+          console.warn('⚠️ Could not find session via charge:', err.message);
+        }
+      }
+      
+      // If still no session metadata, use paymentIntent metadata as fallback
+      if (!sessionMetadata || Object.keys(sessionMetadata).length === 0) {
+        sessionMetadata = paymentIntent.metadata || {};
+        console.log('⚠️ Using paymentIntent.metadata as fallback:', {
+          hasMetadata: !!paymentIntent.metadata,
+          metadataKeys: paymentIntent.metadata ? Object.keys(paymentIntent.metadata) : []
+        });
+      }
 
       // CRITICAL FIX: Get userId from metadata first, then fetch user
-      // Priority: paymentIntent.metadata (more reliable) > sessionMetadata > session.metadata
-      let userId = paymentIntent.metadata?.userId || sessionMetadata?.userId || session?.metadata?.userId || null;
+      // Priority: session.metadata (most reliable - from checkout session) > sessionMetadata > paymentIntent.metadata
+      let userId = session?.metadata?.userId || sessionMetadata?.userId || paymentIntent.metadata?.userId || null;
       let user = null;
       
       // Log metadata sources for debugging
       console.log('🔍 UserId lookup (payment_intent):', {
+        sessionFound: !!session,
+        sessionId: session?.id,
+        sessionMetadata: session?.metadata?.userId,
+        sessionMetadataObject: sessionMetadata?.userId,
         paymentIntentMetadata: paymentIntent.metadata?.userId,
-        sessionMetadata: sessionMetadata?.userId,
-        sessionMetadataFromSession: session?.metadata?.userId,
+        allSessionMetadataKeys: session?.metadata ? Object.keys(session.metadata) : [],
+        allSessionMetadataObjectKeys: Object.keys(sessionMetadata || {}),
         finalUserId: userId
       });
       
