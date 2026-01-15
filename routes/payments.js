@@ -72,6 +72,104 @@ const calculateExpiryDate = (package, startDate = new Date()) => {
   return null;
 };
 
+/**
+ * Resolve userId from checkout session or payment intent
+ * This is the SAME logic used in fallback flow (transaction-by-session endpoint)
+ * Priority order:
+ * 1. session.metadata.userId (primary source - set during checkout creation)
+ * 2. paymentIntent.metadata.userId (if payment intent provided)
+ * 3. session.customer_email → find user by email
+ * 4. paymentIntent.receipt_email → find user by email
+ * 5. Stripe customer email → find user by email
+ * 
+ * @param {Object} session - Stripe checkout session
+ * @param {Object} paymentIntent - Optional Stripe payment intent
+ * @param {Object} stripe - Stripe instance
+ * @returns {Promise<{userId: string|null, source: string, user: Object|null}>}
+ */
+const resolveUserIdFromCheckout = async (session, paymentIntent = null, stripe = null) => {
+  let userId = null;
+  let source = 'none';
+  let user = null;
+
+  // Priority 1: session.metadata.userId (PRIMARY - set during checkout creation from req.userId)
+  if (session?.metadata?.userId) {
+    userId = session.metadata.userId;
+    source = 'session.metadata.userId';
+    console.log('✅ resolveUserIdFromCheckout: Found userId from session.metadata.userId', {
+      userId,
+      source,
+      sessionId: session.id
+    });
+  }
+  // Priority 2: paymentIntent.metadata.userId (if payment intent provided)
+  else if (paymentIntent?.metadata?.userId) {
+    userId = paymentIntent.metadata.userId;
+    source = 'paymentIntent.metadata.userId';
+    console.log('✅ resolveUserIdFromCheckout: Found userId from paymentIntent.metadata.userId', {
+      userId,
+      source,
+      paymentIntentId: paymentIntent.id
+    });
+  }
+  // Priority 3: session.customer_email → find user by email
+  else if (session?.customer_email) {
+    user = await User.findOne({ email: session.customer_email });
+    if (user) {
+      userId = user._id.toString();
+      source = 'session.customer_email';
+      console.log('✅ resolveUserIdFromCheckout: Found userId from session.customer_email', {
+        userId,
+        source,
+        email: session.customer_email,
+        sessionId: session.id
+      });
+    }
+  }
+  // Priority 4: paymentIntent.receipt_email → find user by email
+  else if (paymentIntent?.receipt_email) {
+    user = await User.findOne({ email: paymentIntent.receipt_email });
+    if (user) {
+      userId = user._id.toString();
+      source = 'paymentIntent.receipt_email';
+      console.log('✅ resolveUserIdFromCheckout: Found userId from paymentIntent.receipt_email', {
+        userId,
+        source,
+        email: paymentIntent.receipt_email,
+        paymentIntentId: paymentIntent.id
+      });
+    }
+  }
+  // Priority 5: Stripe customer email → find user by email
+  else if (session?.customer && stripe) {
+    try {
+      const customer = await stripe.customers.retrieve(session.customer);
+      if (customer?.email) {
+        user = await User.findOne({ email: customer.email });
+        if (user) {
+          userId = user._id.toString();
+          source = 'stripe.customer.email';
+          console.log('✅ resolveUserIdFromCheckout: Found userId from Stripe customer email', {
+            userId,
+            source,
+            customerId: session.customer,
+            email: customer.email
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('⚠️ resolveUserIdFromCheckout: Could not retrieve Stripe customer:', err.message);
+    }
+  }
+
+  // If we found userId but don't have user object, fetch it
+  if (userId && !user) {
+    user = await User.findById(userId);
+  }
+
+  return { userId, source, user };
+};
+
 // Determine transaction type based on package targetAudiences or product targetAudience
 // Priority: Product targetAudience > Package targetAudiences (when product is provided)
 const getTransactionType = (package, product = null) => {
@@ -873,88 +971,60 @@ router.post('/webhook', async (req, res) => {
         return res.json({ received: true, processed: true, updated: true });
       }
 
-        // Only create transaction if it doesn't exist (prevent duplicates)
+      // Only create transaction if it doesn't exist (prevent duplicates)
       if (!transaction) {
-        let userId = session.metadata?.userId;
+        // CRITICAL: Use SAME userId resolution logic as fallback flow
+        // This ensures webhook behaves identically to transaction-by-session endpoint
+        let paymentIntent = null;
+        if (session.payment_intent) {
+          try {
+            paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent);
+          } catch (err) {
+            console.warn('⚠️ Could not retrieve payment intent:', err.message);
+          }
+        }
+        
+        const { userId, source, user } = await resolveUserIdFromCheckout(session, paymentIntent, stripe);
+        
+        console.log('🔍 resolveUserIdFromCheckout result (WEBHOOK):', {
+          userId,
+          source,
+          hasUser: !!user,
+          sessionId: session.id,
+          paymentIntentId: session.payment_intent
+        });
+        
+        if (!userId || !user) {
+          console.error('❌ Cannot create transaction: userId missing and user not found by any method');
+          console.error('❌ Full session object:', JSON.stringify(session, null, 2));
+          // Return 200 to prevent Stripe retries, but log the error
+          return res.status(200).json({ 
+            received: true, 
+            error: 'User not found - userId missing in metadata',
+            sessionId: session.id,
+            source: source
+          });
+        }
+        
+        // Extract metadata (same as fallback flow)
         const packageId = session.metadata?.packageId || null;
         const customPackageId = session.metadata?.customPackageId || null;
-        let productId = session.metadata?.productId || null; // Use let instead of const to allow updating
+        let productId = session.metadata?.productId || null;
         let uniqueCode = session.metadata?.uniqueCode || null;
         const billingType = session.metadata?.billingType || 'one_time';
         const directProductPurchase = session.metadata?.directProductPurchase === 'true';
-        const seatLimit = directProductPurchase ? 1 : (parseInt(session.metadata?.seatLimit) || 5); // Default 1 for direct product purchase
-        
-        // CRITICAL: Check if userId exists in metadata, if not try to find by email
-        if (!userId) {
-          console.error('❌ CRITICAL: userId missing in webhook session metadata:', {
-            sessionId: session.id,
-            paymentIntentId: session.payment_intent,
-            metadata: session.metadata,
-            customerEmail: session.customer_email,
-            customer: session.customer,
-            allSessionKeys: Object.keys(session)
-          });
-          
-          // Try to find user by customer email as fallback
-          if (session.customer_email) {
-            const userByEmail = await User.findOne({ email: session.customer_email });
-            if (userByEmail) {
-              userId = userByEmail._id.toString();
-              console.log('✅ Found user by email fallback:', {
-                userId: userId,
-                email: session.customer_email
-              });
-            }
-          }
-          
-          // Try to find user by customer ID if customer_email didn't work
-          if (!userId && session.customer) {
-            try {
-              const customer = await stripe.customers.retrieve(session.customer);
-              if (customer.email) {
-                const userByCustomerEmail = await User.findOne({ email: customer.email });
-                if (userByCustomerEmail) {
-                  userId = userByCustomerEmail._id.toString();
-                  console.log('✅ Found user by Stripe customer email:', {
-                    userId: userId,
-                    customerId: session.customer,
-                    email: customer.email
-                  });
-                }
-              }
-            } catch (err) {
-              console.warn('⚠️ Could not retrieve Stripe customer:', err.message);
-            }
-          }
-          
-          if (!userId) {
-            console.error('❌ Cannot create transaction: userId missing and user not found by any method');
-            console.error('❌ Full session object:', JSON.stringify(session, null, 2));
-            // Return 200 to prevent Stripe retries, but log the error
-            return res.status(200).json({ 
-              received: true, 
-              error: 'User not found - userId missing in metadata',
-              sessionId: session.id
-            });
-          }
-        }
+        const seatLimit = directProductPurchase ? 1 : (parseInt(session.metadata?.seatLimit) || 5);
         
         // Purchase date is when the transaction is created (now)
         const purchaseDate = new Date();
 
-        // Verify user exists - fetch user with all fields
-        const user = await User.findById(userId);
-        console.log('🔍 User data for transaction:', {
-          userId: user?._id,
-          schoolId: user?.schoolId,
-          organizationId: user?.organizationId,
-          email: user?.email
+        console.log('🔍 User data for transaction (WEBHOOK):', {
+          userId: user._id,
+          source: source,
+          schoolId: user.schoolId,
+          organizationId: user.organizationId,
+          email: user.email
         });
-
-        if (!user) {
-          console.error('User not found for checkout session:', session.id);
-          return res.status(200).json({ received: true, error: 'User not found' });
-        }
 
         let package = null;
         let customPackage = null;
@@ -1866,71 +1936,26 @@ router.post('/webhook', async (req, res) => {
         }
       }
 
-      // Get userId from multiple sources with fallback
-      let userId = sessionMetadata?.userId || paymentIntent.metadata?.userId;
+      // CRITICAL: Use SAME userId resolution logic as fallback flow
+      // This ensures webhook behaves identically to transaction-by-session endpoint
+      const { userId, source, user } = await resolveUserIdFromCheckout(session, paymentIntent, stripe);
       
-      // If userId still not found, try to find user by email or customer
-      if (!userId) {
-        console.error('❌ CRITICAL: userId missing in payment_intent webhook:', {
+      console.log('🔍 resolveUserIdFromCheckout result (payment_intent.succeeded WEBHOOK):', {
+        userId,
+        source,
+        hasUser: !!user,
+        paymentIntentId: paymentIntent.id,
+        sessionId: session?.id
+      });
+      
+      if (!userId || !user) {
+        console.error('❌ Cannot create transaction: userId missing and user not found by any method');
+        return res.status(200).json({ 
+          received: true, 
+          error: 'User not found - userId missing in metadata',
           paymentIntentId: paymentIntent.id,
-          paymentIntentMetadata: paymentIntent.metadata,
-          sessionMetadata: sessionMetadata,
-          customer: paymentIntent.customer,
-          receipt_email: paymentIntent.receipt_email
+          source: source
         });
-        
-        // Try to find user by receipt_email
-        if (paymentIntent.receipt_email) {
-          const userByEmail = await User.findOne({ email: paymentIntent.receipt_email });
-          if (userByEmail) {
-            userId = userByEmail._id.toString();
-            console.log('✅ Found user by receipt_email fallback:', {
-              userId: userId,
-              email: paymentIntent.receipt_email
-            });
-          }
-        }
-        
-        // Try to find user by customer email from session
-        if (!userId && session?.customer_email) {
-          const userBySessionEmail = await User.findOne({ email: session.customer_email });
-          if (userBySessionEmail) {
-            userId = userBySessionEmail._id.toString();
-            console.log('✅ Found user by session customer_email fallback:', {
-              userId: userId,
-              email: session.customer_email
-            });
-          }
-        }
-        
-        // Try to find user by customer ID (if customer exists in Stripe)
-        if (!userId && paymentIntent.customer) {
-          try {
-            const customer = await stripe.customers.retrieve(paymentIntent.customer);
-            if (customer.email) {
-              const userByCustomerEmail = await User.findOne({ email: customer.email });
-              if (userByCustomerEmail) {
-                userId = userByCustomerEmail._id.toString();
-                console.log('✅ Found user by Stripe customer email fallback:', {
-                  userId: userId,
-                  customerId: paymentIntent.customer,
-                  email: customer.email
-                });
-              }
-            }
-          } catch (err) {
-            console.warn('⚠️ Could not retrieve Stripe customer:', err.message);
-          }
-        }
-        
-        if (!userId) {
-          console.error('❌ Cannot create transaction: userId missing and user not found by any method');
-          return res.status(200).json({ 
-            received: true, 
-            error: 'User not found - userId missing in metadata',
-            paymentIntentId: paymentIntent.id
-          });
-        }
       }
 
       if (!transaction && userId) {
@@ -1941,13 +1966,13 @@ router.post('/webhook', async (req, res) => {
         const directProductPurchase = (sessionMetadata?.directProductPurchase === 'true') || (paymentIntent.metadata?.directProductPurchase === 'true');
         const seatLimit = directProductPurchase ? 1 : (parseInt(sessionMetadata?.seatLimit || paymentIntent.metadata?.seatLimit) || 5);
 
-        // Fetch user with all fields
-        const user = await User.findById(userId);
-        console.log('🔍 User data for transaction (payment_intent):', {
-          userId: user?._id,
-          schoolId: user?.schoolId,
-          organizationId: user?.organizationId,
-          email: user?.email
+        // User already fetched by resolveUserIdFromCheckout
+        console.log('🔍 User data for transaction (payment_intent WEBHOOK):', {
+          userId: user._id,
+          source: source,
+          schoolId: user.schoolId,
+          organizationId: user.organizationId,
+          email: user.email
         });
         // Handle direct product purchases (no package required)
         if (directProductPurchase && productId) {
