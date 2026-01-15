@@ -896,10 +896,35 @@ router.post('/webhook', async (req, res) => {
 
   try {
     if (webhookSecret && stripe) {
-      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+      // CRITICAL: req.body should be a Buffer from express.raw()
+      // If it's already parsed, we can't verify signature
+      let rawBody = req.body;
+      
+      // If body is already parsed (object), we can't verify - this shouldn't happen
+      if (typeof rawBody === 'object' && !Buffer.isBuffer(rawBody)) {
+        console.error('❌ CRITICAL: Webhook body is already parsed! Raw body parser not working.');
+        console.error('Body type:', typeof rawBody, 'Is Buffer:', Buffer.isBuffer(rawBody));
+        // Try to get raw body from request if available
+        if (req.rawBody) {
+          rawBody = req.rawBody;
+        } else {
+          return res.status(400).send('Webhook Error: Body already parsed. Raw body required for signature verification.');
+        }
+      }
+      
+      // Convert Buffer to string if needed (Stripe expects string or Buffer)
+      if (Buffer.isBuffer(rawBody)) {
+        rawBody = rawBody.toString('utf8');
+      }
+      
+      event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
     } else {
       // In development, parse event without verification
-      event = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body.toString ? JSON.parse(req.body.toString()) : req.body);
+      let bodyToParse = req.body;
+      if (Buffer.isBuffer(bodyToParse)) {
+        bodyToParse = bodyToParse.toString('utf8');
+      }
+      event = typeof bodyToParse === 'string' ? JSON.parse(bodyToParse) : (bodyToParse.toString ? JSON.parse(bodyToParse.toString()) : bodyToParse);
     }
   } catch (err) {
     console.error('❌ Webhook signature verification failed:', {
@@ -907,7 +932,11 @@ router.post('/webhook', async (req, res) => {
       stack: err.stack,
       hasWebhookSecret: !!webhookSecret,
       hasSignature: !!sig,
-      bodyPreview: typeof req.body === 'string' ? req.body.substring(0, 200) : JSON.stringify(req.body).substring(0, 200)
+      bodyType: typeof req.body,
+      isBuffer: Buffer.isBuffer(req.body),
+      bodyPreview: Buffer.isBuffer(req.body) 
+        ? req.body.toString('utf8').substring(0, 200) 
+        : (typeof req.body === 'string' ? req.body.substring(0, 200) : JSON.stringify(req.body).substring(0, 200))
     });
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }

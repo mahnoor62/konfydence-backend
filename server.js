@@ -69,9 +69,10 @@ app.use(cors(corsOptions));
 
 // CRITICAL: Stripe webhook needs raw body - MUST be before express.json()
 // Route path only, NO full URL - Express routes don't use full URLs!
-app.use('api/payments/webhook', express.raw({ type: 'application/json' }));
+// express.raw() returns Buffer, which Stripe needs for signature verification
+app.use('/api/payments/webhook', express.raw({ type: 'application/json', limit: '50mb' }));
 
-// JSON parser - applied to all other routes
+// JSON parser - applied to all other routes (EXCEPT webhook which uses raw body above)
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
