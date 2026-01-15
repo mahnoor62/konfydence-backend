@@ -1781,12 +1781,118 @@ router.post('/webhook', async (req, res) => {
         return res.json({ received: true, processed: true, updated: true });
       }
 
-      if (!transaction && paymentIntent.metadata.userId) {
-        const userId = paymentIntent.metadata.userId;
-        const packageId = paymentIntent.metadata.packageId;
-        const productId = paymentIntent.metadata.productId || null;
-        const uniqueCode = paymentIntent.metadata.uniqueCode;
-        const billingType = paymentIntent.metadata.billingType || 'one_time';
+      // Try to get checkout session from payment intent metadata or retrieve it
+      let session = null;
+      let sessionMetadata = paymentIntent.metadata || {};
+      
+      // Try to retrieve checkout session if we have session ID in metadata
+      if (paymentIntent.metadata?.checkout_session_id) {
+        try {
+          session = await stripe.checkout.sessions.retrieve(paymentIntent.metadata.checkout_session_id);
+          sessionMetadata = session.metadata || {};
+          console.log('✅ Retrieved checkout session from payment intent metadata:', {
+            sessionId: session.id,
+            paymentIntentId: paymentIntent.id
+          });
+        } catch (err) {
+          console.warn('⚠️ Could not retrieve checkout session:', err.message);
+        }
+      }
+      
+      // If no session, try to find by payment intent ID in checkout sessions
+      if (!session) {
+        try {
+          const sessions = await stripe.checkout.sessions.list({
+            payment_intent: paymentIntent.id,
+            limit: 1
+          });
+          if (sessions.data && sessions.data.length > 0) {
+            session = sessions.data[0];
+            sessionMetadata = session.metadata || {};
+            console.log('✅ Found checkout session by payment intent ID:', {
+              sessionId: session.id,
+              paymentIntentId: paymentIntent.id
+            });
+          }
+        } catch (err) {
+          console.warn('⚠️ Could not find checkout session by payment intent:', err.message);
+        }
+      }
+
+      // Get userId from multiple sources with fallback
+      let userId = sessionMetadata?.userId || paymentIntent.metadata?.userId;
+      
+      // If userId still not found, try to find user by email or customer
+      if (!userId) {
+        console.error('❌ CRITICAL: userId missing in payment_intent webhook:', {
+          paymentIntentId: paymentIntent.id,
+          paymentIntentMetadata: paymentIntent.metadata,
+          sessionMetadata: sessionMetadata,
+          customer: paymentIntent.customer,
+          receipt_email: paymentIntent.receipt_email
+        });
+        
+        // Try to find user by receipt_email
+        if (paymentIntent.receipt_email) {
+          const userByEmail = await User.findOne({ email: paymentIntent.receipt_email });
+          if (userByEmail) {
+            userId = userByEmail._id.toString();
+            console.log('✅ Found user by receipt_email fallback:', {
+              userId: userId,
+              email: paymentIntent.receipt_email
+            });
+          }
+        }
+        
+        // Try to find user by customer email from session
+        if (!userId && session?.customer_email) {
+          const userBySessionEmail = await User.findOne({ email: session.customer_email });
+          if (userBySessionEmail) {
+            userId = userBySessionEmail._id.toString();
+            console.log('✅ Found user by session customer_email fallback:', {
+              userId: userId,
+              email: session.customer_email
+            });
+          }
+        }
+        
+        // Try to find user by customer ID (if customer exists in Stripe)
+        if (!userId && paymentIntent.customer) {
+          try {
+            const customer = await stripe.customers.retrieve(paymentIntent.customer);
+            if (customer.email) {
+              const userByCustomerEmail = await User.findOne({ email: customer.email });
+              if (userByCustomerEmail) {
+                userId = userByCustomerEmail._id.toString();
+                console.log('✅ Found user by Stripe customer email fallback:', {
+                  userId: userId,
+                  customerId: paymentIntent.customer,
+                  email: customer.email
+                });
+              }
+            }
+          } catch (err) {
+            console.warn('⚠️ Could not retrieve Stripe customer:', err.message);
+          }
+        }
+        
+        if (!userId) {
+          console.error('❌ Cannot create transaction: userId missing and user not found by any method');
+          return res.status(200).json({ 
+            received: true, 
+            error: 'User not found - userId missing in metadata',
+            paymentIntentId: paymentIntent.id
+          });
+        }
+      }
+
+      if (!transaction && userId) {
+        const packageId = sessionMetadata?.packageId || paymentIntent.metadata?.packageId;
+        const productId = sessionMetadata?.productId || paymentIntent.metadata?.productId || null;
+        const uniqueCode = sessionMetadata?.uniqueCode || paymentIntent.metadata?.uniqueCode;
+        const billingType = sessionMetadata?.billingType || paymentIntent.metadata?.billingType || 'one_time';
+        const directProductPurchase = (sessionMetadata?.directProductPurchase === 'true') || (paymentIntent.metadata?.directProductPurchase === 'true');
+        const seatLimit = directProductPurchase ? 1 : (parseInt(sessionMetadata?.seatLimit || paymentIntent.metadata?.seatLimit) || 5);
 
         // Fetch user with all fields
         const user = await User.findById(userId);
@@ -1796,7 +1902,125 @@ router.post('/webhook', async (req, res) => {
           organizationId: user?.organizationId,
           email: user?.email
         });
+        // Handle direct product purchases (no package required)
+        if (directProductPurchase && productId) {
+          const Product = require('../models/Product');
+          const product = await Product.findById(productId);
+          
+          if (!product) {
+            console.error('Product not found for direct purchase:', productId);
+            return res.status(200).json({ received: true, error: 'Product not found' });
+          }
+          
+          // Determine transaction type from urlType or user role
+          const urlType = sessionMetadata?.urlType || paymentIntent.metadata?.urlType || null;
+          let transactionType = 'b2c_purchase';
+          if (urlType === 'B2B') {
+            transactionType = 'b2b_contract';
+          } else if (urlType === 'B2E') {
+            transactionType = 'b2e_contract';
+          } else if (user.role === 'b2b_user' || user.role === 'b2b_member') {
+            transactionType = 'b2b_contract';
+          } else if (user.role === 'b2e_user' || user.role === 'b2e_member') {
+            transactionType = 'b2e_contract';
+          }
+          
+          const isShopPagePurchase = (sessionMetadata?.shopPagePurchase === 'true') || (paymentIntent.metadata?.shopPagePurchase === 'true');
+          const metadataPackageType = sessionMetadata?.packageType || paymentIntent.metadata?.packageType || 'physical';
+          const packageType = metadataPackageType;
+          
+          // Generate unique code for digital products
+          let finalUniqueCode = uniqueCode;
+          if ((packageType === 'digital' || packageType === 'digital_physical') && !finalUniqueCode) {
+            const TransactionModel = require('../models/Transaction');
+            let generatedCode = generateUniqueCode();
+            let codeExists = await TransactionModel.findOne({ uniqueCode: generatedCode });
+            while (codeExists) {
+              generatedCode = generateUniqueCode();
+              codeExists = await TransactionModel.findOne({ uniqueCode: generatedCode });
+            }
+            finalUniqueCode = generatedCode;
+          }
+          
+          // Get organizationId or schoolId from user
+          const organizationId = user.organizationId || null;
+          const schoolId = user.schoolId || null;
+          
+          // Check if user is owner of school/organization
+          const OrganizationModel = require('../models/Organization');
+          const SchoolModel = require('../models/School');
+          let ownerOrgId = null;
+          let ownerSchoolId = null;
+          
+          try {
+            const orgAsOwner = await OrganizationModel.findOne({ ownerId: user._id });
+            if (orgAsOwner) ownerOrgId = orgAsOwner._id;
+          } catch (e) {}
+          
+          try {
+            const schoolAsOwner = await SchoolModel.findOne({ ownerId: user._id });
+            if (schoolAsOwner) ownerSchoolId = schoolAsOwner._id;
+          } catch (e) {}
+          
+          // Calculate expiry date (1 year for direct product purchases)
+          const purchaseDate = new Date();
+          const expiryDate = new Date(purchaseDate);
+          expiryDate.setFullYear(expiryDate.getFullYear() + 1);
+          const contractEndDate = setEndOfDay(expiryDate);
+          
+          transaction = await Transaction.create({
+            type: transactionType,
+            userId: userId,
+            organizationId: organizationId || ownerOrgId,
+            schoolId: schoolId || ownerSchoolId,
+            packageId: undefined, // No package for direct product purchases
+            customPackageId: undefined,
+            packageType: packageType,
+            productId: productId,
+            amount: paymentIntent.amount / 100,
+            currency: paymentIntent.currency.toUpperCase(),
+            status: 'paid',
+            paymentProvider: 'stripe',
+            stripePaymentIntentId: paymentIntent.id,
+            uniqueCode: (packageType === 'physical') ? undefined : finalUniqueCode,
+            maxSeats: seatLimit,
+            usedSeats: 0,
+            codeApplications: 0,
+            gamePlays: [],
+            referrals: [],
+            contractPeriod: {
+              startDate: purchaseDate,
+              endDate: contractEndDate,
+            },
+            webhookData: webhookEventData,
+            webhookEventType: event.type,
+            webhookReceivedAt: new Date(),
+          });
+          
+          console.log('✅ Transaction created via webhook (payment_intent.succeeded - direct product) with webhook data:', {
+            transactionId: transaction._id,
+            webhookEventType: event.type,
+            webhookEventId: event.id,
+            stripePaymentIntentId: transaction.stripePaymentIntentId,
+            productId: productId,
+            packageType: packageType
+          });
+          
+          return res.json({ received: true, processed: true });
+        }
+        
+        // Handle regular package purchases
+        if (!packageId) {
+          console.error('Neither packageId nor directProductPurchase found in payment_intent metadata');
+          return res.status(200).json({ received: true, error: 'Package ID or direct product purchase required' });
+        }
+        
         const package = await Package.findById(packageId);
+        
+        if (!package) {
+          console.error('Package not found:', packageId);
+          return res.status(200).json({ received: true, error: 'Package not found' });
+        }
         
         // Fetch product if productId is provided
         let product = null;
