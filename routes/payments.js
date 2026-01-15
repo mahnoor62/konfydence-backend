@@ -1023,8 +1023,13 @@ router.post('/webhook', async (req, res) => {
       }
       
       // Check if transaction already exists for this checkout session (prevent duplicates)
+      // Check by both payment intent ID and session ID to catch all cases
       let transaction = await Transaction.findOne({
-        stripePaymentIntentId: session.payment_intent || session.id,
+        $or: [
+          { stripePaymentIntentId: session.payment_intent },
+          { stripePaymentIntentId: session.id },
+          { 'webhookData.paymentIntentId': session.payment_intent }
+        ]
       });
 
       // If transaction already exists (created via fallback), update it with webhook data
@@ -1726,6 +1731,28 @@ router.post('/webhook', async (req, res) => {
           if (schoolAsOwner) ownerSchoolId = schoolAsOwner._id;
         } catch (e) {}
 
+        // FINAL DUPLICATE CHECK: Check one more time before creating to prevent race conditions
+        const finalDuplicateCheck = await Transaction.findOne({
+          $or: [
+            { stripePaymentIntentId: session.payment_intent },
+            { stripePaymentIntentId: session.id },
+            { 'webhookData.paymentIntentId': session.payment_intent }
+          ]
+        });
+        
+        if (finalDuplicateCheck) {
+          console.log('⚠️ Duplicate transaction detected before creation, skipping:', {
+            existingTransactionId: finalDuplicateCheck._id,
+            stripePaymentIntentId: session.payment_intent || session.id
+          });
+          return res.json({ 
+            received: true, 
+            processed: true, 
+            updated: true,
+            transactionId: finalDuplicateCheck._id
+          });
+        }
+
         // Create transaction ONLY when payment succeeds
         // For direct product purchases, don't save any package-related fields
         transaction = await Transaction.create({
@@ -2086,9 +2113,13 @@ router.post('/webhook', async (req, res) => {
       // Also handle payment_intent.succeeded for backward compatibility
       const paymentIntent = event.data.object;
       
-      // Check if transaction already exists
+      // Check if transaction already exists (prevent duplicates)
+      // Check by payment intent ID and also by session payment intent if available
       let transaction = await Transaction.findOne({
-        stripePaymentIntentId: paymentIntent.id,
+        $or: [
+          { stripePaymentIntentId: paymentIntent.id },
+          { 'webhookData.paymentIntentId': paymentIntent.id }
+        ]
       });
 
       // If transaction already exists (created via fallback), update it with webhook data
@@ -2434,6 +2465,27 @@ router.post('/webhook', async (req, res) => {
           expiryDate.setFullYear(expiryDate.getFullYear() + 1);
           const contractEndDate = setEndOfDay(expiryDate);
           
+          // FINAL DUPLICATE CHECK: Check one more time before creating to prevent race conditions
+          const finalDuplicateCheck = await Transaction.findOne({
+            $or: [
+              { stripePaymentIntentId: paymentIntent.id },
+              { 'webhookData.paymentIntentId': paymentIntent.id }
+            ]
+          });
+          
+          if (finalDuplicateCheck) {
+            console.log('⚠️ Duplicate transaction detected before creation (payment_intent - direct product), skipping:', {
+              existingTransactionId: finalDuplicateCheck._id,
+              paymentIntentId: paymentIntent.id
+            });
+            return res.json({ 
+              received: true, 
+              processed: true, 
+              updated: true,
+              transactionId: finalDuplicateCheck._id
+            });
+          }
+
           // Update webhookEventData with essential data only
           const updatedWebhookData = extractEssentialWebhookData(event, session, user, product);
           
@@ -2538,6 +2590,27 @@ router.post('/webhook', async (req, res) => {
               console.warn('⚠️ Could not fetch product for webhookData:', err.message);
             }
           }
+          // FINAL DUPLICATE CHECK: Check one more time before creating to prevent race conditions
+          const finalDuplicateCheck = await Transaction.findOne({
+            $or: [
+              { stripePaymentIntentId: paymentIntent.id },
+              { 'webhookData.paymentIntentId': paymentIntent.id }
+            ]
+          });
+          
+          if (finalDuplicateCheck) {
+            console.log('⚠️ Duplicate transaction detected before creation (payment_intent - package), skipping:', {
+              existingTransactionId: finalDuplicateCheck._id,
+              paymentIntentId: paymentIntent.id
+            });
+            return res.json({ 
+              received: true, 
+              processed: true, 
+              updated: true,
+              transactionId: finalDuplicateCheck._id
+            });
+          }
+
           const updatedWebhookData = extractEssentialWebhookData(event, session, user, productForWebhook);
 
           transaction = await Transaction.create({
