@@ -68,7 +68,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 // Stripe webhook needs raw body, handle it before json parser
 // IMPORTANT: Route path mein full URL nahi aata, sirf path aata hai
-app.use('https://apis.konfydence.com/api/payments/webhook', express.raw({ type: 'application/json' }));
+app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
