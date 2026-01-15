@@ -884,18 +884,91 @@ router.post('/webhook', async (req, res) => {
   }
 
   try {
-    // Store complete webhook event data
-    const webhookEventData = {
-      id: event.id,
-      type: event.type,
-      created: event.created,
-      livemode: event.livemode,
-      api_version: event.api_version,
-      data: event.data,
-      object: event.data?.object || null,
-      request: event.request || null,
-      pending_webhooks: event.pending_webhooks || null,
-      received_at: new Date()
+    // Helper function to extract essential webhook data only
+    const extractEssentialWebhookData = (event, session = null, user = null, product = null) => {
+      const essentialData = {
+        paymentIntentId: null,
+        userId: null,
+        userEmail: null,
+        productId: null,
+        productPrice: null,
+        currency: 'USD',
+        paymentStatus: null,
+        webhookEventId: event.id,
+        webhookEventType: event.type,
+        receivedAt: new Date()
+      };
+
+      // Extract from checkout.session.completed event
+      if (event.type === 'checkout.session.completed' && session) {
+        essentialData.paymentIntentId = session.payment_intent || null;
+        essentialData.paymentStatus = session.payment_status || null;
+        essentialData.currency = session.currency?.toUpperCase() || 'USD';
+        
+        if (session.metadata) {
+          essentialData.userId = session.metadata.userId || null;
+          essentialData.productId = session.metadata.productId || null;
+        }
+        
+        essentialData.userEmail = session.customer_email || null;
+        
+        // Get product price if product is provided
+        if (product && product.price) {
+          essentialData.productPrice = product.price;
+        } else if (session.amount_total) {
+          // Fallback to session amount if product not available
+          essentialData.productPrice = session.amount_total / 100;
+        }
+      }
+      
+      // Extract from payment_intent.succeeded event
+      if (event.type === 'payment_intent.succeeded') {
+        const paymentIntent = event.data?.object;
+        if (paymentIntent) {
+          essentialData.paymentIntentId = paymentIntent.id || null;
+          essentialData.paymentStatus = paymentIntent.status || null;
+          essentialData.currency = paymentIntent.currency?.toUpperCase() || 'USD';
+          
+          if (paymentIntent.metadata) {
+            essentialData.userId = paymentIntent.metadata.userId || null;
+            essentialData.productId = paymentIntent.metadata.productId || null;
+          }
+          
+          essentialData.userEmail = paymentIntent.receipt_email || null;
+          
+          if (paymentIntent.amount) {
+            essentialData.productPrice = paymentIntent.amount / 100;
+          }
+        }
+      }
+      
+      // Override with user data if available
+      if (user) {
+        essentialData.userId = user._id?.toString() || essentialData.userId;
+        essentialData.userEmail = user.email || essentialData.userEmail;
+      }
+      
+      // Override with product data if available
+      if (product) {
+        essentialData.productId = product._id?.toString() || essentialData.productId;
+        essentialData.productPrice = product.price || essentialData.productPrice;
+      }
+      
+      return essentialData;
+    };
+
+    // Store minimal essential webhook data (will be populated later with user/product info)
+    let webhookEventData = {
+      paymentIntentId: null,
+      userId: null,
+      userEmail: null,
+      productId: null,
+      productPrice: null,
+      currency: 'USD',
+      paymentStatus: null,
+      webhookEventId: event.id,
+      webhookEventType: event.type,
+      receivedAt: new Date()
     };
 
     console.log('📥 Webhook Event Received:', {
@@ -963,8 +1036,19 @@ router.post('/webhook', async (req, res) => {
           webhookEventId: event.id
         });
 
-        // Update transaction with webhook data
-        transaction.webhookData = webhookEventData;
+        // Update transaction with essential webhook data only
+        const sessionForUpdate = event.data?.object;
+        const userForUpdate = await User.findById(transaction.userId);
+        let productForUpdate = null;
+        if (transaction.productId) {
+          try {
+            const Product = require('../models/Product');
+            productForUpdate = await Product.findById(transaction.productId).select('_id price');
+          } catch (err) {
+            console.warn('⚠️ Could not fetch product for webhookData update:', err.message);
+          }
+        }
+        transaction.webhookData = extractEssentialWebhookData(event, sessionForUpdate, userForUpdate, productForUpdate);
         transaction.webhookEventType = event.type;
         transaction.webhookReceivedAt = new Date();
         await transaction.save();
@@ -1596,6 +1680,24 @@ router.post('/webhook', async (req, res) => {
         // CRITICAL: Always use USD for transactions, not PKR or other currencies
         const currency = 'USD';
 
+        // Fetch product if productId exists (for webhookData)
+        let productForWebhook = null;
+        if (productId) {
+          try {
+            const Product = require('../models/Product');
+            const mongoose = require('mongoose');
+            const trimmedProductId = (productId || '').trim();
+            if (mongoose.Types.ObjectId.isValid(trimmedProductId)) {
+              productForWebhook = await Product.findById(trimmedProductId).select('_id price');
+            }
+          } catch (err) {
+            console.warn('⚠️ Could not fetch product for webhookData:', err.message);
+          }
+        }
+
+        // Update webhookEventData with essential data only
+        webhookEventData = extractEssentialWebhookData(event, session, user, productForWebhook);
+
         // Get organizationId or schoolId from custom package or user
         let organizationId = null;
         let schoolId = null;
@@ -1998,8 +2100,19 @@ router.post('/webhook', async (req, res) => {
           webhookEventId: event.id
         });
 
-        // Update transaction with webhook data
-        transaction.webhookData = webhookEventData;
+        // Update transaction with essential webhook data only
+        const sessionForUpdate = event.data?.object;
+        const userForUpdate = await User.findById(transaction.userId);
+        let productForUpdate = null;
+        if (transaction.productId) {
+          try {
+            const Product = require('../models/Product');
+            productForUpdate = await Product.findById(transaction.productId).select('_id price');
+          } catch (err) {
+            console.warn('⚠️ Could not fetch product for webhookData update:', err.message);
+          }
+        }
+        transaction.webhookData = extractEssentialWebhookData(event, sessionForUpdate, userForUpdate, productForUpdate);
         transaction.webhookEventType = event.type;
         transaction.webhookReceivedAt = new Date();
         await transaction.save();
@@ -2321,6 +2434,9 @@ router.post('/webhook', async (req, res) => {
           expiryDate.setFullYear(expiryDate.getFullYear() + 1);
           const contractEndDate = setEndOfDay(expiryDate);
           
+          // Update webhookEventData with essential data only
+          const updatedWebhookData = extractEssentialWebhookData(event, session, user, product);
+          
           transaction = await Transaction.create({
             type: transactionType,
             userId: userId,
@@ -2345,7 +2461,7 @@ router.post('/webhook', async (req, res) => {
               startDate: purchaseDate,
               endDate: contractEndDate,
             },
-            webhookData: webhookEventData,
+            webhookData: updatedWebhookData,
             webhookEventType: event.type,
             webhookReceivedAt: new Date(),
           });
@@ -2409,6 +2525,21 @@ router.post('/webhook', async (req, res) => {
             if (schoolAsOwner) ownerSchoolId = schoolAsOwner._id;
           } catch (e) {}
 
+          // Update webhookEventData with essential data only
+          let productForWebhook = null;
+          if (productId) {
+            try {
+              const Product = require('../models/Product');
+              const trimmedProductId = (productId || '').trim();
+              if (mongoose.Types.ObjectId.isValid(trimmedProductId)) {
+                productForWebhook = await Product.findById(trimmedProductId).select('_id price');
+              }
+            } catch (err) {
+              console.warn('⚠️ Could not fetch product for webhookData:', err.message);
+            }
+          }
+          const updatedWebhookData = extractEssentialWebhookData(event, session, user, productForWebhook);
+
           transaction = await Transaction.create({
             type: transactionType,
             userId: userId,
@@ -2441,8 +2572,8 @@ router.post('/webhook', async (req, res) => {
                   : null;
               })(),
             },
-            // Store complete webhook event data
-            webhookData: webhookEventData,
+            // Store essential webhook data only
+            webhookData: updatedWebhookData,
             webhookEventType: event.type,
             webhookReceivedAt: new Date(),
           });
