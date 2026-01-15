@@ -1761,7 +1761,7 @@ router.post('/webhook', async (req, res) => {
         
         // Check if user is owner of any school
         try {
-          schoolAsOwner = await SchoolModel3.findOne({ ownerId: user._id });
+          schoolAsOwner = await School.findOne({ ownerId: user._id });
           if (schoolAsOwner) {
             if (!schoolAsOwner.transactionIds) {
               schoolAsOwner.transactionIds = [];
@@ -1780,7 +1780,7 @@ router.post('/webhook', async (req, res) => {
         // If user has organizationId, add to organization (as member)
         if (user.organizationId) {
           try {
-            const organization = await OrganizationModel4.findById(user.organizationId);
+            const organization = await Organization.findById(user.organizationId);
             if (organization) {
               // Initialize transactionIds if it doesn't exist
               if (!organization.transactionIds) {
@@ -1806,7 +1806,7 @@ router.post('/webhook', async (req, res) => {
         // If user has schoolId, add to school (as member)
         if (user.schoolId) {
           try {
-            const school = await SchoolModel4.findById(user.schoolId);
+            const school = await School.findById(user.schoolId);
             if (school) {
               // Initialize transactionIds if it doesn't exist
               if (!school.transactionIds) {
@@ -1833,7 +1833,7 @@ router.post('/webhook', async (req, res) => {
         // This ensures custom packages are linked to the correct organization/school
         if (transaction.organizationId) {
           try {
-            const transactionOrg = await OrganizationModel4.findById(transaction.organizationId);
+            const transactionOrg = await Organization.findById(transaction.organizationId);
             if (transactionOrg) {
               // Skip if already added above
               const alreadyAdded = 
@@ -1857,9 +1857,9 @@ router.post('/webhook', async (req, res) => {
           }
         }
         
-        if (transaction.schoolId) {
-          try {
-            const transactionSchool = await SchoolModel4.findById(transaction.schoolId);
+            if (transaction.schoolId) {
+              try {
+                const transactionSchool = await School.findById(transaction.schoolId);
             if (transactionSchool) {
               // Skip if already added above
               const alreadyAdded = 
