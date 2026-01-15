@@ -49,7 +49,8 @@ router.get('/', async (req, res) => {
     // For admin panel (all=true), show all posts regardless of published status
     if (published === 'true' && !fetchAll) {
       query.isPublished = true;
-      query.publishedAt = { $lte: new Date() };
+      // Only show posts where publishedAt is set and is less than or equal to current date/time
+      query.publishedAt = { $exists: true, $lte: new Date() };
     }
 
     if (category) {
@@ -148,8 +149,17 @@ router.post(
         req.body.slug = await ensureUniqueSlug(req.body.slug);
       }
 
+      // Handle publishedAt: if isPublished is true but no publishedAt provided, set to current date
       if (req.body.isPublished && !req.body.publishedAt) {
         req.body.publishedAt = new Date();
+      }
+      // If publishedAt is provided, ensure it's a valid date
+      if (req.body.publishedAt) {
+        const publishDate = new Date(req.body.publishedAt);
+        if (isNaN(publishDate.getTime())) {
+          return res.status(400).json({ error: 'Invalid publish date format' });
+        }
+        req.body.publishedAt = publishDate;
       }
 
       const post = await BlogPost.create(req.body);
@@ -193,8 +203,17 @@ router.put(
         req.body.slug = await ensureUniqueSlug(req.body.slug, req.params.id);
       }
 
+      // Handle publishedAt: if isPublished is true but no publishedAt provided, set to current date
       if (req.body.isPublished && !req.body.publishedAt) {
         req.body.publishedAt = new Date();
+      }
+      // If publishedAt is provided, ensure it's a valid date
+      if (req.body.publishedAt) {
+        const publishDate = new Date(req.body.publishedAt);
+        if (isNaN(publishDate.getTime())) {
+          return res.status(400).json({ error: 'Invalid publish date format' });
+        }
+        req.body.publishedAt = publishDate;
       }
 
       const post = await BlogPost.findByIdAndUpdate(
