@@ -1285,13 +1285,14 @@ router.post('/webhook', async (req, res) => {
             
             if (!product) {
               // Continue without product - transaction will be created with productId from metadata
+            } else {
+              console.log('✅ Product found for direct purchase:', {
+                productId: product._id,
+                productName: product.title || product.name,
+                productPrice: product.price,
+                sessionId: session.id
+              });
             }
-            console.log('✅ Product found for direct purchase:', {
-              productId: product._id,
-              productName: product.title || product.name,
-              productPrice: product.price,
-              sessionId: session.id
-            });
           } catch (err) {
             console.error('❌ Error finding product:', {
               error: err.message,
@@ -2013,8 +2014,17 @@ router.post('/webhook', async (req, res) => {
       }
 
       // CRITICAL FIX: Get userId from metadata first, then fetch user
-      let userId = sessionMetadata?.userId || paymentIntent.metadata?.userId || null;
+      // Priority: paymentIntent.metadata (more reliable) > sessionMetadata > session.metadata
+      let userId = paymentIntent.metadata?.userId || sessionMetadata?.userId || session?.metadata?.userId || null;
       let user = null;
+      
+      // Log metadata sources for debugging
+      console.log('🔍 UserId lookup (payment_intent):', {
+        paymentIntentMetadata: paymentIntent.metadata?.userId,
+        sessionMetadata: sessionMetadata?.userId,
+        sessionMetadataFromSession: session?.metadata?.userId,
+        finalUserId: userId
+      });
       
       if (userId) {
         try {
@@ -2035,7 +2045,15 @@ router.post('/webhook', async (req, res) => {
         }
       }
       
-      // If still no user, try email lookup
+      // If still no user, try email lookup from paymentIntent
+      if (!user && paymentIntent.receipt_email) {
+        user = await User.findOne({ email: paymentIntent.receipt_email });
+        if (user) {
+          userId = user._id.toString();
+        }
+      }
+      
+      // If still no user, try email lookup from session
       if (!user && session?.customer_email) {
         user = await User.findOne({ email: session.customer_email });
         if (user) {
@@ -2045,7 +2063,10 @@ router.post('/webhook', async (req, res) => {
       
       if (!userId || !user) {
         console.error('❌ Cannot create transaction: userId missing and user not found by any method', {
-          userIdFromMetadata: sessionMetadata?.userId || paymentIntent.metadata?.userId,
+          userIdFromPaymentIntent: paymentIntent.metadata?.userId,
+          userIdFromSessionMetadata: sessionMetadata?.userId,
+          userIdFromSession: session?.metadata?.userId,
+          receiptEmail: paymentIntent.receipt_email,
           customerEmail: session?.customer_email,
           paymentIntentId: paymentIntent.id
         });
