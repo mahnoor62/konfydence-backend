@@ -2060,6 +2060,22 @@ router.post('/webhook', async (req, res) => {
         }
       }
       
+      // CRITICAL: If we can't find the session, skip transaction creation
+      // checkout.session.completed will handle it with all the metadata
+      if (!session) {
+        console.log('⚠️ Session not found for payment_intent.succeeded - skipping transaction creation. checkout.session.completed will handle it.', {
+          paymentIntentId: paymentIntent.id,
+          hasPaymentIntentMetadata: !!paymentIntent.metadata,
+          paymentIntentMetadataKeys: paymentIntent.metadata ? Object.keys(paymentIntent.metadata) : []
+        });
+        return res.status(200).json({ 
+          received: true, 
+          processed: false,
+          message: 'Session not found - checkout.session.completed will handle transaction creation',
+          paymentIntentId: paymentIntent.id
+        });
+      }
+
       // If still no session metadata, use paymentIntent metadata as fallback
       if (!sessionMetadata || Object.keys(sessionMetadata).length === 0) {
         sessionMetadata = paymentIntent.metadata || {};
@@ -2148,8 +2164,10 @@ router.post('/webhook', async (req, res) => {
         }
       }
       
+      // If we still can't find userId/user, skip transaction creation
+      // checkout.session.completed will handle it
       if (!userId || !user) {
-        console.error('❌ Cannot create transaction: userId missing and user not found by any method', {
+        console.log('⚠️ Cannot find userId/user for payment_intent.succeeded - skipping transaction creation. checkout.session.completed will handle it.', {
           userIdFromPaymentIntent: paymentIntent.metadata?.userId,
           userIdFromSessionMetadata: sessionMetadata?.userId,
           userIdFromSession: session?.metadata?.userId,
@@ -2162,7 +2180,8 @@ router.post('/webhook', async (req, res) => {
         });
         return res.status(200).json({ 
           received: true, 
-          error: 'User not found - userId missing in metadata',
+          processed: false,
+          message: 'User not found - checkout.session.completed will handle transaction creation',
           paymentIntentId: paymentIntent.id
         });
       }
