@@ -2114,11 +2114,19 @@ router.post('/webhook', async (req, res) => {
       const paymentIntent = event.data.object;
       
       // Check if transaction already exists (prevent duplicates)
-      // Check by payment intent ID and also by session payment intent if available
+      // Check by payment intent ID, webhook data, and also get uniqueCode from metadata to check
+      let uniqueCodeFromMetadata = null;
+      if (paymentIntent.metadata?.uniqueCode) {
+        uniqueCodeFromMetadata = paymentIntent.metadata.uniqueCode;
+      }
+      
       let transaction = await Transaction.findOne({
         $or: [
           { stripePaymentIntentId: paymentIntent.id },
-          { 'webhookData.paymentIntentId': paymentIntent.id }
+          { 'webhookData.paymentIntentId': paymentIntent.id },
+          ...(uniqueCodeFromMetadata && uniqueCodeFromMetadata !== '' && uniqueCodeFromMetadata !== 'null' && uniqueCodeFromMetadata !== 'undefined' 
+            ? [{ uniqueCode: uniqueCodeFromMetadata }] 
+            : [])
         ]
       });
 
@@ -2361,6 +2369,25 @@ router.post('/webhook', async (req, res) => {
         const directProductPurchase = (sessionMetadata?.directProductPurchase === 'true') || (paymentIntent.metadata?.directProductPurchase === 'true');
         const seatLimit = directProductPurchase ? 1 : (parseInt(sessionMetadata?.seatLimit || paymentIntent.metadata?.seatLimit) || 5);
 
+        // CRITICAL: Check if transaction with same uniqueCode already exists (prevent duplicates)
+        if (uniqueCode && uniqueCode !== '' && uniqueCode !== 'null' && uniqueCode !== 'undefined') {
+          const existingTransactionByCode = await Transaction.findOne({ uniqueCode });
+          if (existingTransactionByCode) {
+            console.log('⚠️ Transaction with same uniqueCode already exists, skipping creation (payment_intent.succeeded):', {
+              uniqueCode: uniqueCode,
+              existingTransactionId: existingTransactionByCode._id,
+              paymentIntentId: paymentIntent.id
+            });
+            return res.status(200).json({ 
+              received: true, 
+              processed: false,
+              message: 'Transaction with same uniqueCode already exists - checkout.session.completed already handled it',
+              transactionId: existingTransactionByCode._id,
+              paymentIntentId: paymentIntent.id
+            });
+          }
+        }
+
         // Handle direct product purchases (no package required)
         if (directProductPurchase && productId) {
           const Product = require('../models/Product');
@@ -2582,6 +2609,7 @@ router.post('/webhook', async (req, res) => {
           if (productId) {
             try {
               const Product = require('../models/Product');
+              const mongoose = require('mongoose');
               const trimmedProductId = (productId || '').trim();
               if (mongoose.Types.ObjectId.isValid(trimmedProductId)) {
                 productForWebhook = await Product.findById(trimmedProductId).select('_id price');
