@@ -1284,12 +1284,12 @@ How to Use Your Code:
 ` : ''}
 
 ${isPhysical ? `
-Important Notes:
-- Package Type: Physical
-- Your physical card game kit purchase has been confirmed
-- Physical cards will be shipped to your registered address
-- No digital access code is required - this is a physical product only
-` : `
+// Important Notes:
+// - Package Type: Physical
+// - Your physical card game kit purchase has been confirmed
+// - Physical cards will be shipped to your registered address
+// - No digital access code is required - this is a physical product only
+// ` : `
 Important Notes:
 - Keep this code safe and secure
 - Package Type: ${packageTypeLabel}
