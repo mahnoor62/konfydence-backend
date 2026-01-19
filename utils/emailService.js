@@ -648,6 +648,137 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
     ? null 
     : (transaction.contractPeriod?.endDate ? calculateExpiryInfo(transaction.contractPeriod.endDate) : null);
 
+  // Get user's first name
+  const firstName = user.name ? user.name.split(' ')[0] : 'Valued Customer';
+  
+  // Get product name/title
+  const productName = product?.title || product?.name || package?.name || 'Konfydence Bundle';
+  
+  // Get expiry date
+  const expiryDate = transaction.contractPeriod?.endDate ? formatDate(transaction.contractPeriod.endDate) : null;
+  
+  // Get seat count
+  const seatCount = transaction.maxSeats || package?.seatLimit || 1;
+  
+  // Logo URL - use environment variable, uploads folder, or default
+  // Logo should be placed in: api/uploads/logo.png
+  const baseUrl = process.env.API_URL || process.env.FRONTEND_URL || 'http://localhost:5000';
+  const logoUrl = process.env.LOGO_URL || `${baseUrl}/uploads/logo.png` || 'https://konfydence.com/logo.png';
+
+  // Only show new email pattern for digital and digital_physical products
+  if (packageType === 'digital' || packageType === 'digital_physical') {
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your Konfydence Bundle & Access Code</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #ffffff;">
+  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #ffffff; padding: 20px;">
+    <tr>
+      <td align="center" style="padding: 20px 0;">
+        <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: ${colors.white}; border-radius: 8px; overflow: hidden;">
+          <!-- Logo Header -->
+          <tr>
+            <td style="padding: 30px; text-align: center; background-color: #ffffff;">
+              <img src="${logoUrl}" alt="Konfydence Logo" style="max-width: 200px; height: auto; display: block; margin: 0 auto;" />
+            </td>
+          </tr>
+          
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px 30px;">
+              <p style="margin: 0 0 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">
+                Hi ${firstName},
+              </p>
+              
+              <p style="margin: 0 0 30px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">
+                Thank you for choosing the <strong>${productName}</strong> — your payment has been successfully processed.
+              </p>
+              
+              <!-- Personal Access Code Section -->
+              ${transaction.uniqueCode ? `
+              <div style="margin: 30px 0;">
+                <h3 style="margin: 0 0 10px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">Your personal access code</h3>
+                <p style="margin: 0 0 15px 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                  Use this to unlock the digital experience:
+                </p>
+                <div style="background-color: ${colors.primary}; color: ${colors.white}; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
+                  <p style="margin: 0; color: ${colors.white}; font-size: 28px; font-weight: 700; letter-spacing: 2px; font-family: 'Courier New', monospace;">${transaction.uniqueCode}</p>
+                </div>
+              </div>
+              ` : ''}
+              
+              <!-- What's Included Section -->
+              <div style="margin: 30px 0;">
+                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">What's included</h3>
+                <ul style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
+                  ${packageType === 'digital' ? `
+                  <li style="margin-bottom: 10px;">Digital Scenario Lab (${seatCount} seat${seatCount > 1 ? 's' : ''}) — available immediately</li>
+                  ` : packageType === 'digital_physical' ? `
+                  <li style="margin-bottom: 10px;">Digital Scenario Lab (${seatCount} seat${seatCount > 1 ? 's' : ''}) — available immediately</li>
+                  <li style="margin-bottom: 10px;">Konfydence Physical Card Deck — delivered separately</li>
+                  ` : ''}
+                </ul>
+                ${expiryDate ? `
+                <p style="margin: 15px 0 0 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                  Your digital access is valid until ${expiryDate}.
+                </p>
+                ` : ''}
+              </div>
+              
+              <!-- How to Start Section -->
+              <div style="margin: 30px 0;">
+                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">How to start</h3>
+                <ol style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
+                  <li style="margin-bottom: 10px;">Visit the Konfydence game page</li>
+                  <li style="margin-bottom: 10px;">Enter your personal code</li>
+                  <li style="margin-bottom: 10px;">Begin practicing the pause</li>
+                </ol>
+              </div>
+              
+              <!-- Important Notes -->
+              ${transaction.uniqueCode ? `
+              <p style="margin: 30px 0 20px 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                Please keep your code safe — it is unique to you and can be used once.
+              </p>
+              ` : ''}
+              
+              <p style="margin: 20px 0 0 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                If you need any help, just reply to this email and we'll be happy to assist.
+              </p>
+              
+              <!-- Closing -->
+              <p style="margin: 30px 0 0 0; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
+                With clarity and calm,<br>
+                The Konfydence Team
+              </p>
+            </td>
+          </tr>
+          
+          <!-- Footer -->
+          <tr>
+            <td style="background-color: ${colors.primary}; padding: 20px 30px; text-align: center;">
+              <p style="margin: 0; color: ${colors.white}; font-size: 12px;">
+                © ${new Date().getFullYear()} Konfydence. All rights reserved.
+              </p>
+              <p style="margin: 5px 0 0 0; color: ${colors.accent}; font-size: 12px;">
+                Safer Digital Decisions
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `;
+  }
+
+  // Keep old template for physical products and other types
   return `
 <!DOCTYPE html>
 <html>
@@ -1055,7 +1186,51 @@ const sendTransactionSuccessEmail = async (transaction, user, package, organizat
 
     // Create text version for email clients that don't support HTML
     const isPhysical = packageType === 'physical';
-    const textVersion = `Dear ${user.name || 'Valued Customer'},
+    const isDigital = packageType === 'digital' || packageType === 'digital_physical';
+    const firstName = user.name ? user.name.split(' ')[0] : 'Valued Customer';
+    const productName = product?.title || product?.name || package?.name || 'Konfydence Bundle';
+    const expiryDate = transaction.contractPeriod?.endDate ? formatDate(transaction.contractPeriod.endDate) : null;
+    const seatCount = transaction.maxSeats || package?.seatLimit || 1;
+
+    let textVersion;
+    if (isDigital) {
+      // New pattern for digital and digital_physical products
+      const uniqueCodeSection = transaction.uniqueCode ? `Your personal access code
+Use this to unlock the digital experience:
+${transaction.uniqueCode}
+
+` : '';
+      
+      const whatsIncludedSection = packageType === 'digital' 
+        ? `• Digital Scenario Lab (${seatCount} seat${seatCount > 1 ? 's' : ''}) — available immediately`
+        : packageType === 'digital_physical'
+          ? `• Digital Scenario Lab (${seatCount} seat${seatCount > 1 ? 's' : ''}) — available immediately
+• Konfydence Physical Card Deck — delivered separately`
+          : '';
+      
+      const expirySection = expiryDate ? `Your digital access is valid until ${expiryDate}.` : '';
+      const codeSafetyNote = transaction.uniqueCode ? `Please keep your code safe — it is unique to you and can be used once.` : '';
+
+      textVersion = `Hi ${firstName},
+
+Thank you for choosing the ${productName} — your payment has been successfully processed.
+
+${uniqueCodeSection}What's included
+${whatsIncludedSection}
+${expirySection ? expirySection + '\n' : ''}
+
+How to start
+1. Visit the Konfydence game page
+2. Enter your personal code
+3. Begin practicing the pause
+
+${codeSafetyNote ? codeSafetyNote + '\n' : ''}If you need any help, just reply to this email and we'll be happy to assist.
+
+With clarity and calm,
+The Konfydence Team`;
+    } else {
+      // Old pattern for physical products
+      textVersion = `Dear ${user.name || 'Valued Customer'},
 
 ${isPhysical ? 'Thank you for purchasing the Tactical Card Game Kit! Your payment has been successfully processed. Your physical cards will be shipped to you soon.' : 'Thank you for your purchase! Your payment has been successfully processed.'}
 
@@ -1118,15 +1293,24 @@ If you have any questions or need assistance, please don't hesitate to contact u
 
 Best regards,
 The Konfydence Team`;
+    }
+
+    // Determine subject line based on package type
+    let emailSubject;
+    if (packageType === 'digital' || packageType === 'digital_physical') {
+      emailSubject = 'Your Konfydence Bundle & Access Code';
+    } else if (isShopPagePurchase && product) {
+      emailSubject = `Payment Successful - ${product.title || product.name || 'Product Purchase'}`;
+    } else if (packageType === 'physical' && product) {
+      emailSubject = `Payment Successful - ${product.title || product.name || 'Physical Card Game Kit'}`;
+    } else {
+      emailSubject = `Payment Successful - Your Unique Code: ${transaction.uniqueCode || 'N/A'}`;
+    }
 
     const mailOptions = {
       from: `"Konfydence" <${process.env.SMTP_USER}>`,
       to: user.email,
-      subject: isShopPagePurchase && product
-        ? `Payment Successful - ${product.title || product.name || 'Product Purchase'}`
-        : packageType === 'physical' && product
-          ? `Payment Successful - ${product.title || product.name || 'Physical Card Game Kit'}`
-          : `Payment Successful - Your Unique Code: ${transaction.uniqueCode || 'N/A'}`,
+      subject: emailSubject,
       html: emailHtml,
       text: textVersion,
       // Add headers similar to verification emails
