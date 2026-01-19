@@ -41,8 +41,8 @@ const colors = {
 
 // Helper function to get logo URL
 const getLogoUrl = () => {
-  const baseUrl = process.env.API_URL || process.env.FRONTEND_URL || 'http://localhost:5000';
-  return process.env.LOGO_URL || `${baseUrl}/public/logo.png` || 'https://konfydence.com/logo.png';
+  const backendUrl = process.env.BACKEND_URL;
+  return `${backendUrl}/public/logo.png`;
 };
 
 // Helper function to create email header with logo and text
@@ -1068,30 +1068,25 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
                   <li style="margin-bottom: 10px;">Your physical card game kit will be shipped to your registered address</li>
                   <li style="margin-bottom: 10px;">You will receive shipping confirmation via email once your order is dispatched</li>
                   <li style="margin-bottom: 10px;">Once you receive your physical cards, you can start playing offline with your family</li>
-                  <li>No digital access code is needed for physical products - the game is played with physical cards</li>
+                  // <li>No digital access code is needed for physical products - the game is played with physical cards</li>
                 </ol>
               </div>
               ` : ''}
               
+              ${packageType !== 'physical' ? `
               <!-- Important Notes -->
               <div style="margin: 30px 0;">
                 <p style="margin: 0 0 10px 0; color: ${colors.text}; font-size: 14px; font-weight: 600;">Important Notes:</p>
                 <ul style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.6;">
-                  ${packageType !== 'physical' && transaction.uniqueCode ? `
+                  ${transaction.uniqueCode ? `
                   <li style="margin-bottom: 8px;">Keep this code safe and secure</li>
                   ` : ''}
                   <li style="margin-bottom: 8px;">Package Type: <strong>${packageTypeLabel}</strong></li>
-                  ${packageType === 'physical' ? `
-                  <li style="margin-bottom: 8px;">Your physical card game kit purchase has been confirmed</li>
-                  <li style="margin-bottom: 8px;">Physical cards will be shipped to your registered address</li>
-                  <li style="margin-bottom: 8px;">No digital access code is required - this is a physical product only</li>
-                  ` : `
                   <li style="margin-bottom: 8px;">You have ${transaction.maxSeats || 5} seat${(transaction.maxSeats || 5) > 1 ? 's' : ''} available for game play</li>
                   <li style="margin-bottom: 8px;">Each seat can only be used once</li>
-                  `}
-                  ${packageType !== 'physical' && expiryInfo ? `
+                  ${expiryInfo ? `
                   <li style="margin-bottom: 8px;">Package Expiry: <strong>${expiryInfo.message}</strong>${transaction.contractPeriod?.endDate ? ` (${formatDate(transaction.contractPeriod.endDate)})` : ''}</li>
-                  ` : packageType !== 'physical' && transaction.contractPeriod?.endDate ? `
+                  ` : transaction.contractPeriod?.endDate ? `
                   <li style="margin-bottom: 8px;">Your code is valid until ${formatDate(transaction.contractPeriod.endDate)}</li>
                   ` : ''}
                   ${packageType === 'digital_physical' ? `
@@ -1099,6 +1094,7 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
                   ` : ''}
                 </ul>
               </div>
+              ` : ''}
               
               <!-- Contact Info -->
               <div style="border-top: 2px solid ${colors.background}; padding-top: 20px; margin-top: 30px;">
