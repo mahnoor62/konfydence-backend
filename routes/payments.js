@@ -1785,9 +1785,9 @@ router.post('/webhook', async (req, res) => {
             stripePaymentIntentId: session.payment_intent || session.id,
             // For physical products, don't save uniqueCode (no digital access code needed)
             // For digital/digital_physical products (shop page, Products page, or regular packages), save uniqueCode
-            uniqueCode: (packageType === 'physical') ? undefined : (uniqueCode || undefined),
-            maxSeats: (directProductPurchase && packageType) ? maxSeats : (directProductPurchase && packageType === 'physical' ? 0 : maxSeats), // Use maxSeats from metadata for Products page purchases
-            usedSeats: 0,
+          uniqueCode: (packageType === 'physical') ? undefined : (uniqueCode || undefined),
+          maxSeats: packageType === 'physical' ? 0 : maxSeats, // Physical products have 0 seats (no digital access)
+          usedSeats: 0,
             codeApplications: 0,
             gamePlays: [],
             referrals: [],
