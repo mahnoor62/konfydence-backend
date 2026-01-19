@@ -412,6 +412,24 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
         const pkgId = m.packageId?._id?.toString() || m.packageId?.toString();
         const relatedTransactions = packageToTransactions[pkgId] || [];
         
+        // Find the most recent transaction for this membership to get correct expiry date
+        let transactionEndDate = null;
+        if (relatedTransactions.length > 0) {
+          // Find the transaction with latest endDate
+          const txsForPackage = allTransactions.filter(tx => 
+            relatedTransactions.includes(tx._id.toString())
+          );
+          if (txsForPackage.length > 0) {
+            // Sort by contractPeriod.endDate descending and get the latest
+            const latestTx = txsForPackage.sort((a, b) => {
+              const dateA = a.contractPeriod?.endDate || new Date(0);
+              const dateB = b.contractPeriod?.endDate || new Date(0);
+              return new Date(dateB) - new Date(dateA);
+            })[0];
+            transactionEndDate = latestTx.contractPeriod?.endDate || null;
+          }
+        }
+        
         // Find game progress for this membership (by transaction or package)
         let membershipProgress = null;
         
@@ -471,21 +489,44 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
           type: m.membershipType,
           status: m.status,
           startDate: m.startDate,
-          endDate: m.endDate,
+          endDate: transactionEndDate || m.endDate, // Use transaction's contractPeriod.endDate if available
           packageId: pkgId,
           package: m.packageId,
           gameProgress: membershipProgress
         };
       }),
       // All active packages (same as active memberships but with different structure)
-      activePackages: activeMemberships.map((m) => ({
-        id: m._id,
-        packageId: m.packageId?._id || m.packageId,
-        packageName: m.packageId?.name || 'Unknown',
-        membershipType: m.membershipType,
-        startDate: m.startDate,
-        endDate: m.endDate,
-      })),
+      activePackages: activeMemberships.map((m) => {
+        const pkgId = m.packageId?._id?.toString() || m.packageId?.toString();
+        const relatedTransactions = packageToTransactions[pkgId] || [];
+        
+        // Find the most recent transaction for this membership to get correct expiry date
+        let transactionEndDate = null;
+        if (relatedTransactions.length > 0) {
+          // Find the transaction with latest endDate
+          const txsForPackage = allTransactions.filter(tx => 
+            relatedTransactions.includes(tx._id.toString())
+          );
+          if (txsForPackage.length > 0) {
+            // Sort by contractPeriod.endDate descending and get the latest
+            const latestTx = txsForPackage.sort((a, b) => {
+              const dateA = a.contractPeriod?.endDate || new Date(0);
+              const dateB = b.contractPeriod?.endDate || new Date(0);
+              return new Date(dateB) - new Date(dateA);
+            })[0];
+            transactionEndDate = latestTx.contractPeriod?.endDate || null;
+          }
+        }
+        
+        return {
+          id: m._id,
+          packageId: m.packageId?._id || m.packageId,
+          packageName: m.packageId?.name || 'Unknown',
+          membershipType: m.membershipType,
+          startDate: m.startDate,
+          endDate: transactionEndDate || m.endDate, // Use transaction's contractPeriod.endDate if available
+        };
+      }),
       progress: {
         totalCards,
         completedCards,
