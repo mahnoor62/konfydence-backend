@@ -51,14 +51,14 @@ const createEmailHeader = () => {
   return `
           <!-- Header with Logo -->
           <tr>
-            <td style="background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%); padding: 30px;">
+            <td style="background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%); padding: 20px 30px;">
               <table role="presentation" style="width: 100%; border-collapse: collapse;">
                 <tr>
-                  <td style="width: 120px; vertical-align: middle;">
-                    <img src="${logoUrl}" alt="Konfydence Logo" style="max-width: 100px; height: auto; display: block;" />
+                  <td style="width: 80px; vertical-align: middle; padding-right: 15px;">
+                    <img src="${logoUrl}" alt="Konfydence Logo" style="max-width: 60px; height: auto; display: block;" />
                   </td>
-                  <td style="vertical-align: middle; text-align: left; padding-left: 20px;">
-                    <h1 style="margin: 0; color: ${colors.white}; font-size: 28px; font-weight: 700;">Konfydence</h1>
+                  <td style="vertical-align: middle; text-align: center;">
+                    <h1 style="margin: 0; color: ${colors.white}; font-size: 28px; font-weight: 700; line-height: 1.2;">Konfydence</h1>
                     <p style="margin: 5px 0 0 0; color: ${colors.accent}; font-size: 14px; font-weight: 500;">Safer Digital Decisions</p>
                   </td>
                 </tr>
