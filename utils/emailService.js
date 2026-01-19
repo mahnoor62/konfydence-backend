@@ -1184,6 +1184,16 @@ const sendTransactionSuccessEmail = async (transaction, user, package, organizat
     const organizationName = organization?.name || (isOrganizationTransaction ? 'Your Organization' : null);
     const organizationType = organization?.type;
 
+    // Format date helper function
+    const formatDate = (date) => {
+      if (!date) return 'N/A';
+      return new Date(date).toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+      });
+    };
+
     // Create text version for email clients that don't support HTML
     const isPhysical = packageType === 'physical';
     const isDigital = packageType === 'digital' || packageType === 'digital_physical';
