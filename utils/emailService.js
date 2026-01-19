@@ -630,16 +630,8 @@ const calculateExpiryInfo = (endDate) => {
     return { status: 'active', days: diffDays, message: `Expires in ${months} month${months > 1 ? 's' : ''} (${diffDays} days)` };
   } else {
     const years = Math.floor(diffDays / 365);
-    const remainingDays = diffDays % 365;
-    // Only show remaining days if they are significant (less than 7 days)
-    if (remainingDays === 0) {
-      return { status: 'active', days: diffDays, message: `Expires in ${years} year${years > 1 ? 's' : ''}` };
-    } else if (remainingDays < 7) {
-      return { status: 'active', days: diffDays, message: `Expires in ${years} year${years > 1 ? 's' : ''} and ${remainingDays} day${remainingDays > 1 ? 's' : ''}` };
-    } else {
-      // For more than 7 days remaining, just show years
-      return { status: 'active', days: diffDays, message: `Expires in ${years} year${years > 1 ? 's' : ''}` };
-    }
+    // For custom packages and long-term contracts, only show years (not days)
+    return { status: 'active', days: diffDays, message: `Expires in ${years} year${years > 1 ? 's' : ''}` };
   }
 };
 
