@@ -1068,7 +1068,6 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
                   <li style="margin-bottom: 10px;">Your physical card game kit will be shipped to your registered address</li>
                   <li style="margin-bottom: 10px;">You will receive shipping confirmation via email once your order is dispatched</li>
                   <li style="margin-bottom: 10px;">Once you receive your physical cards, you can start playing offline with your family</li>
-                  // <li>No digital access code is needed for physical products - the game is played with physical cards</li>
                 </ol>
               </div>
               ` : ''}
