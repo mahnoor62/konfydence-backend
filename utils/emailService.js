@@ -46,7 +46,7 @@ const getLogoUrl = () => {
 };
 
 // Helper function to create email header with logo and text
-const createEmailHeader = () => {
+const createEmailHeader = () => { 
   const logoUrl = getLogoUrl();
   return `
           <!-- Header with Logo -->
@@ -631,7 +631,15 @@ const calculateExpiryInfo = (endDate) => {
   } else {
     const years = Math.floor(diffDays / 365);
     const remainingDays = diffDays % 365;
-    return { status: 'active', days: diffDays, message: `Expires in ${years} year${years > 1 ? 's' : ''}${remainingDays > 0 ? ` and ${remainingDays} days` : ''}` };
+    // Only show remaining days if they are significant (less than 7 days)
+    if (remainingDays === 0) {
+      return { status: 'active', days: diffDays, message: `Expires in ${years} year${years > 1 ? 's' : ''}` };
+    } else if (remainingDays < 7) {
+      return { status: 'active', days: diffDays, message: `Expires in ${years} year${years > 1 ? 's' : ''} and ${remainingDays} day${remainingDays > 1 ? 's' : ''}` };
+    } else {
+      // For more than 7 days remaining, just show years
+      return { status: 'active', days: diffDays, message: `Expires in ${years} year${years > 1 ? 's' : ''}` };
+    }
   }
 };
 
