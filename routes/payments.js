@@ -1767,40 +1767,81 @@ router.post('/webhook', async (req, res) => {
 
         // Create transaction ONLY when payment succeeds
         // For direct product purchases, don't save any package-related fields
-        transaction = await Transaction.create({
-          type: transactionType,
-          userId: userId,
-          organizationId: organizationId || ownerOrgId, // Set organizationId from custom package, user, or owner
-          schoolId: schoolId || ownerSchoolId, // Set schoolId from custom package, user, or owner
-          // For direct product purchases, packageId is undefined but packageType is 'physical' and no uniqueCode
-          packageId: directProductPurchase ? undefined : (packageId || null), // Regular package ID (undefined for direct product purchase)
-          customPackageId: directProductPurchase ? undefined : (customPackageId || null), // Custom package ID (undefined for direct product purchase)
-          packageType: packageType || null, // Package type ('physical' for direct product purchases)
-          productId: productId || null,
-          amount: amount,
-          currency: currency,
-          status: 'paid',
-          paymentProvider: 'stripe',
-          stripePaymentIntentId: session.payment_intent || session.id,
-          // For physical products, don't save uniqueCode (no digital access code needed)
-          // For digital/digital_physical products (shop page, Products page, or regular packages), save uniqueCode
-          uniqueCode: (packageType === 'physical') ? undefined : (uniqueCode || undefined),
-          maxSeats: (directProductPurchase && packageType) ? maxSeats : (directProductPurchase && packageType === 'physical' ? 0 : maxSeats), // Use maxSeats from metadata for Products page purchases
-          usedSeats: 0,
-          codeApplications: 0,
-          gamePlays: [],
-          referrals: [],
-          contractPeriod: {
-            startDate: purchaseDate, // Start date is purchase date
-            endDate: contractEndDate || (billingType === 'subscription'
-              ? new Date(purchaseDate.getTime() + 365 * 24 * 60 * 60 * 1000)
-              : null),
-          },
-          // Store complete webhook event data
-          webhookData: webhookEventData,
-          webhookEventType: event.type,
-          webhookReceivedAt: new Date(),
-        });
+        try {
+          transaction = await Transaction.create({
+            type: transactionType,
+            userId: userId,
+            organizationId: organizationId || ownerOrgId, // Set organizationId from custom package, user, or owner
+            schoolId: schoolId || ownerSchoolId, // Set schoolId from custom package, user, or owner
+            // For direct product purchases, packageId is undefined but packageType is 'physical' and no uniqueCode
+            packageId: directProductPurchase ? undefined : (packageId || null), // Regular package ID (undefined for direct product purchase)
+            customPackageId: directProductPurchase ? undefined : (customPackageId || null), // Custom package ID (undefined for direct product purchase)
+            packageType: packageType || null, // Package type ('physical' for direct product purchases)
+            productId: productId || null,
+            amount: amount,
+            currency: currency,
+            status: 'paid',
+            paymentProvider: 'stripe',
+            stripePaymentIntentId: session.payment_intent || session.id,
+            // For physical products, don't save uniqueCode (no digital access code needed)
+            // For digital/digital_physical products (shop page, Products page, or regular packages), save uniqueCode
+            uniqueCode: (packageType === 'physical') ? undefined : (uniqueCode || undefined),
+            maxSeats: (directProductPurchase && packageType) ? maxSeats : (directProductPurchase && packageType === 'physical' ? 0 : maxSeats), // Use maxSeats from metadata for Products page purchases
+            usedSeats: 0,
+            codeApplications: 0,
+            gamePlays: [],
+            referrals: [],
+            contractPeriod: {
+              startDate: purchaseDate, // Start date is purchase date
+              endDate: contractEndDate || (billingType === 'subscription'
+                ? new Date(purchaseDate.getTime() + 365 * 24 * 60 * 60 * 1000)
+                : null),
+            },
+            // Store complete webhook event data
+            webhookData: webhookEventData,
+            webhookEventType: event.type,
+            webhookReceivedAt: new Date(),
+          });
+        } catch (createError) {
+          // Handle duplicate key error (E11000) - this can happen when Stripe sends duplicate webhooks
+          if (createError.code === 11000 && createError.message.includes('stripePaymentIntentId')) {
+            console.log('⚠️ Duplicate transaction detected (stripePaymentIntentId already exists), fetching existing transaction:', {
+              stripePaymentIntentId: session.payment_intent || session.id,
+              eventId: event.id,
+              eventType: event.type
+            });
+            
+            // Find the existing transaction
+            transaction = await Transaction.findOne({
+              $or: [
+                { stripePaymentIntentId: session.payment_intent },
+                { stripePaymentIntentId: session.id }
+              ]
+            });
+            
+            if (transaction) {
+              console.log('✅ Found existing transaction, returning success:', {
+                transactionId: transaction._id,
+                stripePaymentIntentId: transaction.stripePaymentIntentId
+              });
+              
+              // Return success since transaction already exists
+              return res.json({ 
+                received: true, 
+                processed: true, 
+                duplicate: true,
+                transactionId: transaction._id 
+              });
+            } else {
+              // This shouldn't happen, but log it if it does
+              console.error('❌ Duplicate key error but transaction not found:', createError);
+              throw createError;
+            }
+          } else {
+            // Re-throw other errors
+            throw createError;
+          }
+        }
 
         // Verify webhook data was saved
         const savedTransaction = await Transaction.findById(transaction._id);
