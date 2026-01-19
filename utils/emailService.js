@@ -39,6 +39,35 @@ const colors = {
   white: '#FFFFFF',
 };
 
+// Helper function to get logo URL
+const getLogoUrl = () => {
+  const baseUrl = process.env.API_URL || process.env.FRONTEND_URL || 'http://localhost:5000';
+  return process.env.LOGO_URL || `${baseUrl}/public/logo.png` || 'https://konfydence.com/logo.png';
+};
+
+// Helper function to create email header with logo and text
+const createEmailHeader = () => {
+  const logoUrl = getLogoUrl();
+  return `
+          <!-- Header with Logo -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%); padding: 30px;">
+              <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="width: 120px; vertical-align: middle;">
+                    <img src="${logoUrl}" alt="Konfydence Logo" style="max-width: 100px; height: auto; display: block;" />
+                  </td>
+                  <td style="vertical-align: middle; text-align: left; padding-left: 20px;">
+                    <h1 style="margin: 0; color: ${colors.white}; font-size: 28px; font-weight: 700;">Konfydence</h1>
+                    <p style="margin: 5px 0 0 0; color: ${colors.accent}; font-size: 14px; font-weight: 500;">Safer Digital Decisions</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+  `;
+};
+
 const getStatusColor = (status) => {
   const statusColors = {
     pending: '#FFA500',      // Orange
@@ -78,13 +107,7 @@ const createEmailTemplate = (request, status, adminNotes) => {
     <tr>
       <td align="center" style="padding: 20px 0;">
         <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: ${colors.white}; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-          <!-- Header -->
-          <tr>
-            <td style="background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%); padding: 30px; text-align: center;">
-              <h1 style="margin: 0; color: ${colors.white}; font-size: 28px; font-weight: 700;">Konfydence</h1>
-              <p style="margin: 5px 0 0 0; color: ${colors.accent}; font-size: 14px; font-weight: 500;">Safer Digital Decisions</p>
-            </td>
-          </tr>
+          ${createEmailHeader()}
           
           <!-- Content -->
           <tr>
@@ -269,13 +292,7 @@ const createCustomPackageEmailTemplate = (request, customPackage) => {
     <tr>
       <td align="center" style="padding: 20px 0;">
         <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: ${colors.white}; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-          <!-- Header -->
-          <tr>
-            <td style="background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%); padding: 30px; text-align: center;">
-              <h1 style="margin: 0; color: ${colors.white}; font-size: 28px; font-weight: 700;">Konfydence</h1>
-              <p style="margin: 5px 0 0 0; color: ${colors.accent}; font-size: 14px; font-weight: 500;">Safer Digital Decisions</p>
-            </td>
-          </tr>
+          ${createEmailHeader()}
           
           <!-- Content -->
           <tr>
@@ -659,11 +676,6 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
   
   // Get seat count
   const seatCount = transaction.maxSeats || package?.seatLimit || 1;
-  
-  // Logo URL - use environment variable, uploads folder, or default
-  // Logo should be placed in: api/uploads/logo.png
-  const baseUrl = process.env.API_URL || process.env.FRONTEND_URL || 'http://localhost:5000';
-  const logoUrl = process.env.LOGO_URL || `${baseUrl}/uploads/logo.png` || 'https://konfydence.com/logo.png';
 
   // Only show new email pattern for digital and digital_physical products
   if (packageType === 'digital' || packageType === 'digital_physical') {
@@ -680,12 +692,7 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
     <tr>
       <td align="center" style="padding: 20px 0;">
         <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: ${colors.white}; border-radius: 8px; overflow: hidden;">
-          <!-- Logo Header -->
-          <tr>
-            <td style="padding: 30px; text-align: center; background-color: #ffffff;">
-              <img src="${logoUrl}" alt="Konfydence Logo" style="max-width: 200px; height: auto; display: block; margin: 0 auto;" />
-            </td>
-          </tr>
+          ${createEmailHeader()}
           
           <!-- Content -->
           <tr>
@@ -792,13 +799,7 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
     <tr>
       <td align="center" style="padding: 20px 0;">
         <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: ${colors.white}; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-          <!-- Header -->
-          <tr>
-            <td style="background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%); padding: 30px; text-align: center;">
-              <h1 style="margin: 0; color: ${colors.white}; font-size: 28px; font-weight: 700;">Konfydence</h1>
-              <p style="margin: 5px 0 0 0; color: ${colors.accent}; font-size: 14px; font-weight: 500;">Safer Digital Decisions</p>
-            </td>
-          </tr>
+          ${createEmailHeader()}
           
           <!-- Content -->
           <tr>
@@ -1524,13 +1525,7 @@ const sendOrganizationCreatedEmail = async (user, organization, password) => {
     <tr>
       <td align="center" style="padding: 20px 0;">
         <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: ${colors.white}; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-          <!-- Header -->
-          <tr>
-            <td style="background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%); padding: 30px; text-align: center;">
-              <h1 style="margin: 0; color: ${colors.white}; font-size: 28px; font-weight: 700;">Konfydence</h1>
-              <p style="margin: 5px 0 0 0; color: ${colors.accent}; font-size: 14px; font-weight: 500;">Safer Digital Decisions</p>
-            </td>
-          </tr>
+          ${createEmailHeader()}
           
           <!-- Content -->
           <tr>
@@ -1699,13 +1694,7 @@ const createDemoRequestEmailTemplate = (firstName, email) => {
     <tr>
       <td align="center" style="padding: 20px 0;">
         <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: ${colors.white}; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-          <!-- Header -->
-          <tr>
-            <td style="background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%); padding: 30px; text-align: center;">
-              <h1 style="margin: 0; color: ${colors.white}; font-size: 28px; font-weight: 700;">Konfydence</h1>
-              <p style="margin: 5px 0 0 0; color: ${colors.accent}; font-size: 14px; font-weight: 500;">Safer Digital Decisions</p>
-            </td>
-          </tr>
+          ${createEmailHeader()}
           
           <!-- Content -->
           <tr>
