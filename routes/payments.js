@@ -1079,6 +1079,21 @@ router.post('/webhook', async (req, res) => {
         return res.json({ received: true, processed: true, updated: true });
       }
 
+      // CRITICAL: Only create transaction if payment was successful
+      // Check payment_status before creating transaction
+      if (session.payment_status !== 'paid' && session.payment_status !== 'complete') {
+        console.warn('⚠️ Payment not completed, skipping transaction creation:', {
+          sessionId: session.id,
+          paymentStatus: session.payment_status,
+          customerEmail: session.customer_email
+        });
+        return res.json({ 
+          received: true, 
+          message: 'Payment not completed yet',
+          paymentStatus: session.payment_status
+        });
+      }
+
       // Only create transaction if it doesn't exist (prevent duplicates)
       if (!transaction) {
         // CRITICAL: Use SAME userId resolution logic as fallback flow
