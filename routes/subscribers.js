@@ -155,5 +155,42 @@ router.get(
   }
 );
 
+router.delete(
+  '/:id',
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!id) {
+        return res.status(400).json({
+          success: false,
+          message: 'Subscriber ID is required.',
+        });
+      }
+
+      const subscriber = await Subscriber.findByIdAndDelete(id);
+
+      if (!subscriber) {
+        return res.status(404).json({
+          success: false,
+          message: 'Subscriber not found.',
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Subscriber deleted successfully.',
+        data: subscriber,
+      });
+    } catch (error) {
+      console.error('Delete subscriber error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'An error occurred while deleting the subscriber.',
+      });
+    }
+  }
+);
+
 module.exports = router;
 

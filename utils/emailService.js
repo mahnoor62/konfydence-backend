@@ -334,6 +334,28 @@ const createCustomPackageEmailTemplate = (request, customPackage) => {
                 </table>
               </div>
               
+              <!-- What's Included Section - For Custom Packages -->
+              <div style="background-color: #F0F8FF; border-left: 4px solid ${colors.secondary}; padding: 20px; margin: 20px 0; border-radius: 4px;">
+                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">What's Included</h3>
+                <ul style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
+                  <li style="margin-bottom: 10px;">Custom package tailored to your organization's needs</li>
+                  <li style="margin-bottom: 10px;">${customPackage.seatLimit || request.requestedModifications?.seatLimit || 'N/A'} seat${(customPackage.seatLimit || request.requestedModifications?.seatLimit || 1) > 1 ? 's' : ''} for game sessions</li>
+                  ${customPackage.description ? `
+                  <li style="margin-bottom: 10px;">${customPackage.description}</li>
+                  ` : ''}
+                  ${customPackage.productIds && customPackage.productIds.length > 0 ? `
+                  <li style="margin-bottom: 10px;">Access to ${customPackage.productIds.length} selected product${customPackage.productIds.length > 1 ? 's' : ''} and feature${customPackage.productIds.length > 1 ? 's' : ''}</li>
+                  ` : ''}
+                  ${customPackage.addedCardIds && customPackage.addedCardIds.length > 0 ? `
+                  <li style="margin-bottom: 10px;">${customPackage.addedCardIds.length} additional custom card${customPackage.addedCardIds.length > 1 ? 's' : ''} included</li>
+                  ` : ''}
+                  ${customPackage.basePackageId ? `
+                  <li style="margin-bottom: 10px;">Base package features and capabilities</li>
+                  ` : ''}
+                  <li>Flexible contract terms and pricing structure</li>
+                </ul>
+              </div>
+              
               <!-- Pricing Details -->
               <div style="background-color: #FFF9E6; border-left: 4px solid ${colors.accent}; padding: 20px; margin: 20px 0; border-radius: 4px;">
                 <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">Pricing Information</h3>
@@ -792,6 +814,70 @@ const createTransactionSuccessEmailTemplate = (transaction, user, package, organ
                   </tr>
                   ` : ''}
                 </table>
+              </div>
+              ` : ''}
+
+              <!-- What's Included Section - Based on Product Type -->
+              ${(shopPagePurchaseFlag && product) || packageType ? `
+              <div style="background-color: #F0F8FF; border-left: 4px solid ${colors.secondary}; padding: 20px; margin: 20px 0; border-radius: 4px;">
+                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">What's Included</h3>
+                ${packageType === 'digital' ? `
+                <ul style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
+                  <li style="margin-bottom: 10px;">Digital access to Scenario Lab platform</li>
+                  <li style="margin-bottom: 10px;">Unique access code for online gameplay</li>
+                  <li style="margin-bottom: 10px;">${transaction.maxSeats || 5} seat${(transaction.maxSeats || 5) > 1 ? 's' : ''} for game sessions</li>
+                  <li style="margin-bottom: 10px;">Interactive digital scenarios and training modules</li>
+                  <li style="margin-bottom: 10px;">Real-time progress tracking and analytics</li>
+                  <li>Access to digital card library and resources</li>
+                </ul>
+                ` : packageType === 'physical' ? `
+                <ul style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
+                  <li style="margin-bottom: 10px;">Physical Tactical Card Game Kit</li>
+                  <li style="margin-bottom: 10px;">Complete set of physical scenario cards</li>
+                  <li style="margin-bottom: 10px;">Game instructions and rulebook</li>
+                  <li style="margin-bottom: 10px;">Offline gameplay capability</li>
+                  <li style="margin-bottom: 10px;">Shipping to your registered address</li>
+                  <li>Physical cards for hands-on training sessions</li>
+                </ul>
+                ` : packageType === 'digital_physical' ? `
+                <ul style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
+                  <li style="margin-bottom: 10px;"><strong>Digital Components:</strong></li>
+                  <li style="margin-bottom: 10px; margin-left: 20px;">Digital access to Scenario Lab platform</li>
+                  <li style="margin-bottom: 10px; margin-left: 20px;">Unique access code for online gameplay</li>
+                  <li style="margin-bottom: 10px; margin-left: 20px;">${transaction.maxSeats || 5} seat${(transaction.maxSeats || 5) > 1 ? 's' : ''} for game sessions</li>
+                  <li style="margin-bottom: 10px; margin-left: 20px;">Interactive digital scenarios and training modules</li>
+                  <li style="margin-bottom: 10px; margin-left: 20px;">Real-time progress tracking and analytics</li>
+                  <li style="margin-bottom: 15px; margin-left: 20px;">Access to digital card library and resources</li>
+                  <li style="margin-bottom: 10px;"><strong>Physical Components:</strong></li>
+                  <li style="margin-bottom: 10px; margin-left: 20px;">Physical Tactical Card Game Kit</li>
+                  <li style="margin-bottom: 10px; margin-left: 20px;">Complete set of physical scenario cards</li>
+                  <li style="margin-bottom: 10px; margin-left: 20px;">Game instructions and rulebook</li>
+                  <li style="margin-bottom: 10px; margin-left: 20px;">Offline gameplay capability</li>
+                  <li style="margin-bottom: 10px; margin-left: 20px;">Shipping to your registered address</li>
+                  <li style="margin-left: 20px;">Physical cards for hands-on training sessions</li>
+                </ul>
+                ` : packageType === 'custom' ? `
+                <ul style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
+                  <li style="margin-bottom: 10px;">Custom package tailored to your organization's needs</li>
+                  <li style="margin-bottom: 10px;">${transaction.maxSeats || package?.seatLimit || 5} seat${(transaction.maxSeats || package?.seatLimit || 5) > 1 ? 's' : ''} for game sessions</li>
+                  ${package?.description ? `
+                  <li style="margin-bottom: 10px;">${package.description}</li>
+                  ` : ''}
+                  ${package?.productIds && package.productIds.length > 0 ? `
+                  <li style="margin-bottom: 10px;">Access to selected products and features</li>
+                  ` : ''}
+                  ${package?.addedCardIds && package.addedCardIds.length > 0 ? `
+                  <li style="margin-bottom: 10px;">Additional custom cards included</li>
+                  ` : ''}
+                  <li>Flexible contract terms and pricing</li>
+                </ul>
+                ` : `
+                <ul style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 14px; line-height: 1.8;">
+                  <li style="margin-bottom: 10px;">Access to your purchased package</li>
+                  <li style="margin-bottom: 10px;">${transaction.maxSeats || 5} seat${(transaction.maxSeats || 5) > 1 ? 's' : ''} for game sessions</li>
+                  <li>Full access to all included features and resources</li>
+                </ul>
+                `}
               </div>
               ` : ''}
 
@@ -1405,12 +1491,163 @@ const sendOrganizationCreatedEmail = async (user, organization, password) => {
   }
 };
 
+const createDemoRequestEmailTemplate = (firstName, email) => {
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Demo Request Received</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: ${colors.background};">
+  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: ${colors.background}; padding: 20px;">
+    <tr>
+      <td align="center" style="padding: 20px 0;">
+        <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: ${colors.white}; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%); padding: 30px; text-align: center;">
+              <h1 style="margin: 0; color: ${colors.white}; font-size: 28px; font-weight: 700;">Konfydence</h1>
+              <p style="margin: 5px 0 0 0; color: ${colors.accent}; font-size: 14px; font-weight: 500;">Safer Digital Decisions</p>
+            </td>
+          </tr>
+          
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px 30px;">
+              <h2 style="margin: 0 0 20px 0; color: ${colors.primary}; font-size: 24px; font-weight: 700;">We've received your demo request</h2>
+              
+              <p style="margin: 0 0 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">
+                Hi ${firstName},
+              </p>
+              
+              <p style="margin: 0 0 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">
+                Thanks for reaching out to Konfydence.
+              </p>
+              
+              <p style="margin: 0 0 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">
+                We've received your demo request and will review it shortly.
+              </p>
+              
+              <!-- What happens next section -->
+              <div style="background-color: ${colors.background}; padding: 20px; border-radius: 8px; margin: 30px 0;">
+                <h3 style="margin: 0 0 15px 0; color: ${colors.primary}; font-size: 18px; font-weight: 600;">What happens next</h3>
+                <ul style="margin: 0; padding-left: 20px; color: ${colors.text}; font-size: 16px; line-height: 1.8;">
+                  <li style="margin-bottom: 10px;">We review your request (usually within 1 business day)</li>
+                  <li style="margin-bottom: 10px;">We recommend a short demo path based on your needs</li>
+                  <li style="margin-bottom: 10px;">Most teams start with a physical demo kit (€99–€249, fully credited on rollout)</li>
+                </ul>
+                <p style="margin: 15px 0 0 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">
+                  No pressure. No obligation. Just practice before decisions.
+                </p>
+              </div>
+              
+              <p style="margin: 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">
+                If you have any context you'd like us to consider in advance, feel free to reply directly to this email.
+              </p>
+              
+              <!-- Contact Info -->
+              <div style="border-top: 2px solid ${colors.background}; padding-top: 20px; margin-top: 30px;">
+                <p style="margin: 0; color: ${colors.secondary}; font-size: 16px; font-weight: 600;">
+                  Warm regards,<br>
+                  Konfydence Team
+                </p>
+              </div>
+            </td>
+          </tr>
+          
+          <!-- Footer -->
+          <tr>
+            <td style="background-color: ${colors.primary}; padding: 20px 30px; text-align: center;">
+              <p style="margin: 0; color: ${colors.white}; font-size: 12px;">
+                © ${new Date().getFullYear()} Konfydence. All rights reserved.
+              </p>
+              <p style="margin: 5px 0 0 0; color: ${colors.accent}; font-size: 12px;">
+                Safer Digital Decisions
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `;
+};
+
+const sendDemoRequestConfirmationEmail = async (firstName, email) => {
+  try {
+    // Check if email service is configured
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.warn('⚠️ Email service not configured. Skipping demo request confirmation email.');
+      return { success: false, message: 'Email service not configured' };
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      console.error('❌ Invalid email format:', email);
+      return { success: false, message: 'Invalid email format' };
+    }
+
+    if (!firstName || !firstName.trim()) {
+      console.error('❌ First name is required');
+      return { success: false, message: 'First name is required' };
+    }
+
+    console.log('📧 Preparing to send demo request confirmation email:', {
+      to: email,
+      firstName: firstName
+    });
+
+    const transporter = createTransporter();
+    const emailHtml = createDemoRequestEmailTemplate(firstName.trim(), email);
+
+    const mailOptions = {
+      from: `"Konfydence" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: "We've received your demo request",
+      html: emailHtml,
+      text: `
+Hi ${firstName.trim()},
+
+Thanks for reaching out to Konfydence.
+
+We've received your demo request and will review it shortly.
+
+What happens next
+- We review your request (usually within 1 business day)
+- We recommend a short demo path based on your needs
+- Most teams start with a physical demo kit (€99–€249, fully credited on rollout)
+
+No pressure. No obligation. Just practice before decisions.
+
+If you have any context you'd like us to consider in advance, feel free to reply directly to this email.
+
+Warm regards,
+
+Konfydence Team
+      `.trim(),
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log('✅ Demo request confirmation email sent successfully:', info.messageId);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error('❌ Error sending demo request confirmation email:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 module.exports = {
   sendStatusUpdateEmail,
   sendCustomPackageCreatedEmail,
   sendTransactionSuccessEmail,
   sendMembershipTerminationEmail,
   sendOrganizationCreatedEmail,
+  sendDemoRequestConfirmationEmail,
   createTransporter,
 };
 

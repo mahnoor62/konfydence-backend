@@ -3,6 +3,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const ContactMessage = require('../models/ContactMessage');
 const Lead = require('../models/Lead');
+const { sendDemoRequestConfirmationEmail } = require('../utils/emailService');
 
 const router = express.Router();
 
@@ -189,6 +190,28 @@ router.post(
             });
           }
           // Don't fail the request if unified lead creation fails for other reasons
+      }
+
+      // Send demo request confirmation email for demo topics
+      const demoTopics = ['demo-schools', 'demo-businesses'];
+      if (demoTopics.includes(req.body.topic)) {
+        try {
+          console.log('📧 Sending demo request confirmation email for topic:', req.body.topic);
+          const emailResult = await sendDemoRequestConfirmationEmail(
+            req.body.firstName,
+            req.body.email
+          );
+          
+          if (emailResult.success) {
+            console.log('✅ Demo request confirmation email sent successfully:', emailResult.messageId);
+          } else {
+            console.warn('⚠️ Failed to send demo request confirmation email:', emailResult.message || emailResult.error);
+            // Don't fail the request if email fails - just log the warning
+          }
+        } catch (emailError) {
+          console.error('❌ Error sending demo request confirmation email:', emailError);
+          // Don't fail the request if email fails - just log the error
+        }
       }
 
       console.log('✅ Contact message created:', message._id);
