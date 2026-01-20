@@ -1228,6 +1228,7 @@ router.post('/webhook', async (req, res) => {
           }
 
           // Determine transaction type based on organization/school
+          const Organization = require('../models/Organization');
           if (customPackage.organizationId) {
             const org = await Organization.findById(customPackage.organizationId);
             transactionType = org?.segment === 'B2B' ? 'b2b_contract' : 'b2e_contract';
