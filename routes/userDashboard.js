@@ -396,6 +396,7 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
         isActive: user.isActive,
         createdAt: user.createdAt,
         lastLogin: user.lastLogin,
+        referralCode: user.referralCode,
       },
       // Primary membership (most recent active one)
       membership: primaryMembership

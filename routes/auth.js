@@ -46,7 +46,21 @@ const validateStrongPassword = (value) => {
 
 const router = express.Router();
 
-
+// Function to generate unique 6-digit referral code
+const generateReferralCode = async () => {
+  let code;
+  let isUnique = false;
+  while (!isUnique) {
+    // Generate 6-digit numeric code
+    code = Math.floor(100000 + Math.random() * 900000).toString();
+    // Check if code already exists
+    const existing = await User.findOne({ referralCode: code });
+    if (!existing) {
+      isUnique = true;
+    }
+  }
+  return code;
+};
 
 router.post(
   '/register-admin',
@@ -351,21 +365,27 @@ router.post(
       const emailVerificationExpiry = new Date();
       emailVerificationExpiry.setHours(emailVerificationExpiry.getHours() + 24); // 24 hours expiry
 
+      // Generate unique referral code for new user
+      const newUserReferralCode = await generateReferralCode();
+      
       // Validate and find referrer if referralCode is provided
       let referrerId = null;
+      let referedByCode = null;
       if (referralCode) {
         try {
-          const referrer = await User.findById(referralCode);
+          // Find user by referralCode (not by ID anymore)
+          const referrer = await User.findOne({ referralCode: referralCode });
           if (referrer) {
             // Make sure user is not referring themselves
             if (referrer.email.toLowerCase() !== email.toLowerCase()) {
               referrerId = referrer._id;
-              console.log('Referrer found:', referrer._id.toString(), 'for new user:', email);
+              referedByCode = referralCode;
+              console.log('Referrer found with code:', referralCode, 'for new user:', email);
             } else {
               console.log('User cannot refer themselves');
             }
           } else {
-            console.log('Referrer not found for ID:', referralCode);
+            console.log('Referrer not found for referral code:', referralCode);
           }
         } catch (error) {
           console.error('Error validating referral code:', error);
@@ -383,7 +403,9 @@ router.post(
         isEmailVerified: false,
         emailVerificationToken,
         emailVerificationExpiry,
-        referredBy: referrerId
+        referredBy: referrerId,
+        referralCode: newUserReferralCode,
+        referedBy: referedByCode
       });
 
       // Verify user was created successfully and has _id
@@ -1383,7 +1405,7 @@ router.post(
         });
       }
 
-      const { email, password, name, organizationCode } = req.body;
+      const { email, password, name, organizationCode, referralCode } = req.body;
 
       const existing = await User.findOne({ email });
       if (existing) {
@@ -1405,6 +1427,23 @@ router.post(
 
       const passwordHash = await bcrypt.hash(password, 10);
       
+      // Generate unique referral code for new user
+      const newUserReferralCode = await generateReferralCode();
+      
+      // Validate referral code if provided
+      let referedByCode = null;
+      if (referralCode) {
+        try {
+          const referrer = await User.findOne({ referralCode: referralCode });
+          if (referrer && referrer.email.toLowerCase() !== email.toLowerCase()) {
+            referedByCode = referralCode;
+            console.log('Member registered with referral code:', referralCode);
+          }
+        } catch (error) {
+          console.error('Error validating referral code for member:', error);
+        }
+      }
+      
       // Create user as member
       const user = await User.create({
         email,
@@ -1415,7 +1454,9 @@ router.post(
         isEmailVerified: false, // No email verification for members initially
         organizationId: organization ? organization._id : null,
         schoolId: school ? school._id : null,
-        memberStatus: 'pending' // Pending approval
+        memberStatus: 'pending', // Pending approval
+        referralCode: newUserReferralCode,
+        referedBy: referedByCode
       });
 
       // Create member request

@@ -74,6 +74,16 @@ const UserSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: 'User'
     },
+    referralCode: {
+      type: String,
+      unique: true,
+      sparse: true,
+      trim: true
+    },
+    referedBy: {
+      type: String,
+      trim: true
+    },
     memberships: [{
       packageId: {
         type: Schema.Types.ObjectId,
