@@ -155,6 +155,8 @@ router.get('/', authenticateToken, checkPermission('users'), async (req, res) =>
 
       const users = await User.find(query)
         .populate('memberships.packageId', 'name')
+        .populate('organizationId', 'name')
+        .populate('schoolId', 'name')
         .sort({ createdAt: -1 });
       res.json(users);
     } else if (segment === 'B2B' || segment === 'B2E') {
@@ -176,6 +178,8 @@ router.get('/', authenticateToken, checkPermission('users'), async (req, res) =>
       // Get users with role (OrgUser model removed, using User table only)
       const usersWithRole = await User.find(userQuery)
         .populate('memberships.packageId', 'name')
+        .populate('organizationId', 'name')
+        .populate('schoolId', 'name')
         .sort({ createdAt: -1 });
 
       res.json(usersWithRole);
@@ -195,6 +199,8 @@ router.get('/', authenticateToken, checkPermission('users'), async (req, res) =>
 
       const users = await User.find(query)
         .populate('memberships.packageId', 'name')
+        .populate('organizationId', 'name')
+        .populate('schoolId', 'name')
         .sort({ createdAt: -1 });
       res.json(users);
     }
