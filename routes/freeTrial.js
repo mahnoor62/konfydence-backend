@@ -401,6 +401,62 @@ router.get('/all', authenticateToken, async (req, res) => {
   }
 });
 
+// Delete free trial (admin only)
+router.delete('/:id', authenticateToken, async (req, res) => {
+  try {
+    // Check if user is admin
+    const adminId = req.adminId || req.userId;
+    
+    let isAdmin = false;
+    
+    if (adminId) {
+      // Check if it's an admin by checking Admin model
+      const Admin = require('../models/Admin');
+      const admin = await Admin.findById(adminId);
+      
+      if (admin) {
+        isAdmin = true;
+      }
+    }
+    
+    // Fallback: Check if regular user is admin (for backward compatibility)
+    if (!isAdmin) {
+      const user = await User.findById(req.userId);
+      if (user && user.role === 'admin') {
+        isAdmin = true;
+      }
+    }
+
+    if (!isAdmin) {
+      return res.status(403).json({ error: 'Access denied. Admin privileges required.' });
+    }
+
+    const { id } = req.params;
+    
+    if (!id) {
+      return res.status(400).json({ error: 'Trial ID is required' });
+    }
+
+    // Find and delete the trial
+    const deletedTrial = await FreeTrial.findByIdAndDelete(id);
+
+    if (!deletedTrial) {
+      return res.status(404).json({ error: 'Trial not found' });
+    }
+
+    res.json({ 
+      message: 'Trial deleted successfully',
+      deletedTrial: {
+        _id: deletedTrial._id,
+        uniqueCode: deletedTrial.uniqueCode
+      }
+    });
+  } catch (error) {
+    console.error('Error deleting trial:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Check if code is valid (public endpoint, no auth required)
 router.get('/check-code/:code', async (req, res) => {
   try {
