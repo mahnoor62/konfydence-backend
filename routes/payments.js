@@ -335,6 +335,53 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    // CRITICAL: Validate urlType matches user role (if urlType is provided)
+    if (urlType) {
+      const userRole = user.role;
+      let urlTypeMatchesRole = false;
+
+      if (urlType === 'B2C') {
+        urlTypeMatchesRole = userRole === 'b2c_user' || userRole === 'admin';
+        if (!urlTypeMatchesRole) {
+          if (userRole === 'b2b_user' || userRole === 'b2b_member') {
+            return res.status(403).json({ error: 'You are a B2B user. You can only purchase B2B products.' });
+          } else if (userRole === 'b2e_user' || userRole === 'b2e_member') {
+            return res.status(403).json({ error: 'You are a B2E user. You can only purchase B2E products.' });
+          } else {
+            return res.status(403).json({ error: 'Your account type does not match the product type. You can only purchase B2C products.' });
+          }
+        }
+      } else if (urlType === 'B2B') {
+        urlTypeMatchesRole = userRole === 'b2b_user' || userRole === 'b2b_member' || userRole === 'admin';
+        if (!urlTypeMatchesRole) {
+          if (userRole === 'b2c_user') {
+            return res.status(403).json({ error: 'You are a B2C user. You can only purchase B2C products.' });
+          } else if (userRole === 'b2e_user' || userRole === 'b2e_member') {
+            return res.status(403).json({ error: 'You are a B2E user. You can only purchase B2E products.' });
+          } else {
+            return res.status(403).json({ error: 'Your account type does not match the product type. You can only purchase B2B products.' });
+          }
+        }
+      } else if (urlType === 'B2E') {
+        urlTypeMatchesRole = userRole === 'b2e_user' || userRole === 'b2e_member' || userRole === 'admin';
+        if (!urlTypeMatchesRole) {
+          if (userRole === 'b2c_user') {
+            return res.status(403).json({ error: 'You are a B2C user. You can only purchase B2C products.' });
+          } else if (userRole === 'b2b_user' || userRole === 'b2b_member') {
+            return res.status(403).json({ error: 'You are a B2B user. You can only purchase B2B products.' });
+          } else {
+            return res.status(403).json({ error: 'Your account type does not match the product type. You can only purchase B2E products.' });
+          }
+        }
+      }
+      
+      console.log('✅ urlType validation passed:', {
+        urlType,
+        userRole,
+        urlTypeMatchesRole
+      });
+    }
+
     // Validate user role and product/package compatibility
     const Product = require('../models/Product');
     let product = null;
@@ -1182,6 +1229,7 @@ router.post('/webhook', async (req, res) => {
         const billingType = session.metadata?.billingType || 'one_time';
         const directProductPurchase = session.metadata?.directProductPurchase === 'true';
         const seatLimit = directProductPurchase ? 1 : (parseInt(session.metadata?.seatLimit) || 5);
+        const urlType = session.metadata?.urlType || null; // Extract urlType from metadata
         
         // Log metadata received from webhook
         console.log('📋 Metadata received from webhook:', session.metadata);
@@ -1924,14 +1972,84 @@ router.post('/webhook', async (req, res) => {
               product = await Product.findById(productId);
             }
 
-            // Determine membership type based on package targetAudiences or product targetAudience
-            const membershipType = getMembershipType(package, product);
-            console.log('🔍 Membership Type Determination:', {
-              productId: productId,
-              productTargetAudience: product?.targetAudience,
-              packageTargetAudiences: package?.targetAudiences,
-              determinedMembershipType: membershipType
+            // Determine membership type - PRIORITY: urlType > getMembershipType
+            // Use urlType from URL if available, otherwise fallback to package/product logic
+            let membershipType = 'b2c'; // Default
+            if (urlType) {
+              // Convert urlType (B2C/B2B/B2E) to membershipType (b2c/b2b/b2e)
+              membershipType = urlType.toLowerCase();
+              console.log('✅ Using urlType for membership type:', {
+                urlType: urlType,
+                membershipType: membershipType
+              });
+            } else {
+              // Fallback to old logic if urlType not provided
+              membershipType = getMembershipType(package, product);
+              console.log('⚠️ urlType not found, using package/product logic:', {
+                productId: productId,
+                productTargetAudience: product?.targetAudience,
+                packageTargetAudiences: package?.targetAudiences,
+                determinedMembershipType: membershipType
+              });
+            }
+            
+            console.log('🔍 Final Membership Type:', {
+              urlType: urlType,
+              membershipType: membershipType,
+              userId: userId,
+              userRole: user.role
             });
+
+            // Validate that user's role matches the membership type
+            const userRole = user.role;
+            let roleMatchesType = false;
+            let errorMessage = '';
+
+            if (membershipType === 'b2c') {
+              roleMatchesType = userRole === 'b2c_user' || userRole === 'admin';
+              if (!roleMatchesType) {
+                if (userRole === 'b2b_user' || userRole === 'b2b_member') {
+                  errorMessage = 'You are a B2B user. You can only purchase B2B products.';
+                } else if (userRole === 'b2e_user' || userRole === 'b2e_member') {
+                  errorMessage = 'You are a B2E user. You can only purchase B2E products.';
+                } else {
+                  errorMessage = 'Your account type does not match the product type. You can only purchase B2C products.';
+                }
+              }
+            } else if (membershipType === 'b2b') {
+              roleMatchesType = userRole === 'b2b_user' || userRole === 'b2b_member' || userRole === 'admin';
+              if (!roleMatchesType) {
+                if (userRole === 'b2c_user') {
+                  errorMessage = 'You are a B2C user. You can only purchase B2C products.';
+                } else if (userRole === 'b2e_user' || userRole === 'b2e_member') {
+                  errorMessage = 'You are a B2E user. You can only purchase B2E products.';
+                } else {
+                  errorMessage = 'Your account type does not match the product type. You can only purchase B2B products.';
+                }
+              }
+            } else if (membershipType === 'b2e') {
+              roleMatchesType = userRole === 'b2e_user' || userRole === 'b2e_member' || userRole === 'admin';
+              if (!roleMatchesType) {
+                if (userRole === 'b2c_user') {
+                  errorMessage = 'You are a B2C user. You can only purchase B2C products.';
+                } else if (userRole === 'b2b_user' || userRole === 'b2b_member') {
+                  errorMessage = 'You are a B2B user. You can only purchase B2B products.';
+                } else {
+                  errorMessage = 'Your account type does not match the product type. You can only purchase B2E products.';
+                }
+              }
+            }
+
+            if (!roleMatchesType) {
+              console.error('❌ Role-Type Mismatch:', {
+                userRole: userRole,
+                membershipType: membershipType,
+                errorMessage: errorMessage
+              });
+              // Log the error but allow transaction to be created (payment already succeeded)
+              // Admin can manually fix membership or refund if needed
+              console.warn('⚠️ Membership not created due to role mismatch. Transaction created but membership skipped.');
+            }
 
             // Determine membership end date - use calculated expiry date from expiryTime or expiryDate
             let membershipEndDate = transaction.contractPeriod.endDate;
@@ -1940,20 +2058,30 @@ router.post('/webhook', async (req, res) => {
               membershipEndDate = calculatedExpiryDate;
             }
 
-            // Add membership to user
-            user.memberships.push({
-              packageId: packageId,
-              membershipType: membershipType,
-              status: 'active',
-              startDate: transaction.contractPeriod.startDate,
-              endDate: membershipEndDate,
-            });
-            await user.save();
-            console.log('✅ Membership added to user:', {
-              userId: userId,
-              packageId: packageId,
-              membershipType: membershipType
-            });
+            // Add membership to user ONLY if role matches type
+            if (roleMatchesType) {
+              user.memberships.push({
+                packageId: packageId,
+                membershipType: membershipType,
+                status: 'active',
+                startDate: transaction.contractPeriod.startDate,
+                endDate: membershipEndDate,
+              });
+              await user.save();
+              console.log('✅ Membership added to user:', {
+                userId: userId,
+                packageId: packageId,
+                membershipType: membershipType,
+                userRole: userRole
+              });
+            } else {
+              console.error('❌ Membership NOT added - role mismatch:', {
+                userId: userId,
+                userRole: userRole,
+                membershipType: membershipType,
+                errorMessage: errorMessage
+              });
+            }
           }
         }
 
@@ -2755,8 +2883,68 @@ router.post('/webhook', async (req, res) => {
             stripePaymentIntentId: transaction.stripePaymentIntentId
           });
 
-          // Determine membership type based on package targetAudiences or product targetAudience
-          const membershipType = getMembershipType(package, product);
+          // Extract urlType from metadata
+          const urlType = sessionMetadata?.urlType || paymentIntent.metadata?.urlType || null;
+
+          // Determine membership type - PRIORITY: urlType > getMembershipType
+          let membershipType = 'b2c'; // Default
+          if (urlType) {
+            // Convert urlType (B2C/B2B/B2E) to membershipType (b2c/b2b/b2e)
+            membershipType = urlType.toLowerCase();
+            console.log('✅ Using urlType for membership type (payment_intent):', {
+              urlType: urlType,
+              membershipType: membershipType
+            });
+          } else {
+            // Fallback to old logic if urlType not provided
+            membershipType = getMembershipType(package, product);
+            console.log('⚠️ urlType not found, using package/product logic (payment_intent):', {
+              productId: productId,
+              productTargetAudience: product?.targetAudience,
+              packageTargetAudiences: package?.targetAudiences,
+              determinedMembershipType: membershipType
+            });
+          }
+
+          // Validate that user's role matches the membership type
+          const userRole = user.role;
+          let roleMatchesType = false;
+          let errorMessage = '';
+
+          if (membershipType === 'b2c') {
+            roleMatchesType = userRole === 'b2c_user' || userRole === 'admin';
+            if (!roleMatchesType) {
+              if (userRole === 'b2b_user' || userRole === 'b2b_member') {
+                errorMessage = 'You are a B2B user. You can only purchase B2B products.';
+              } else if (userRole === 'b2e_user' || userRole === 'b2e_member') {
+                errorMessage = 'You are a B2E user. You can only purchase B2E products.';
+              } else {
+                errorMessage = 'Your account type does not match the product type. You can only purchase B2C products.';
+              }
+            }
+          } else if (membershipType === 'b2b') {
+            roleMatchesType = userRole === 'b2b_user' || userRole === 'b2b_member' || userRole === 'admin';
+            if (!roleMatchesType) {
+              if (userRole === 'b2c_user') {
+                errorMessage = 'You are a B2C user. You can only purchase B2C products.';
+              } else if (userRole === 'b2e_user' || userRole === 'b2e_member') {
+                errorMessage = 'You are a B2E user. You can only purchase B2E products.';
+              } else {
+                errorMessage = 'Your account type does not match the product type. You can only purchase B2B products.';
+              }
+            }
+          } else if (membershipType === 'b2e') {
+            roleMatchesType = userRole === 'b2e_user' || userRole === 'b2e_member' || userRole === 'admin';
+            if (!roleMatchesType) {
+              if (userRole === 'b2c_user') {
+                errorMessage = 'You are a B2C user. You can only purchase B2C products.';
+              } else if (userRole === 'b2b_user' || userRole === 'b2b_member') {
+                errorMessage = 'You are a B2B user. You can only purchase B2B products.';
+              } else {
+                errorMessage = 'Your account type does not match the product type. You can only purchase B2E products.';
+              }
+            }
+          }
 
           // Determine membership end date - use calculated expiry date from expiryTime or expiryDate
           let membershipEndDate = transaction.contractPeriod.endDate;
@@ -2765,14 +2953,30 @@ router.post('/webhook', async (req, res) => {
             membershipEndDate = calculatedExpiryDate;
           }
 
-          user.memberships.push({
-            packageId: packageId,
-            membershipType: membershipType,
-            status: 'active',
-            startDate: transaction.contractPeriod.startDate,
-            endDate: membershipEndDate,
-          });
-          await user.save();
+          // Add membership ONLY if role matches type
+          if (roleMatchesType) {
+            user.memberships.push({
+              packageId: packageId,
+              membershipType: membershipType,
+              status: 'active',
+              startDate: transaction.contractPeriod.startDate,
+              endDate: membershipEndDate,
+            });
+            await user.save();
+            console.log('✅ Membership added to user (payment_intent):', {
+              userId: userId,
+              packageId: packageId,
+              membershipType: membershipType,
+              userRole: userRole
+            });
+          } else {
+            console.error('❌ Membership NOT added - role mismatch (payment_intent):', {
+              userId: userId,
+              userRole: userRole,
+              membershipType: membershipType,
+              errorMessage: errorMessage
+            });
+          }
 
           // Add transaction to organization/school's transactionIds array
           // Check both user.organizationId and user.schoolId separately
@@ -3510,14 +3714,68 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
 
         // Add membership to user (only for regular packages, not custom packages)
           if (package && !customPackage) {
-            // Determine membership type based on package targetAudiences or product targetAudience
-            const membershipType = getMembershipType(package, product);
-            console.log('🔍 Membership Type Determination (fallback):', {
-              productId: productId,
-              productTargetAudience: product?.targetAudience,
-              packageTargetAudiences: package?.targetAudiences,
-              determinedMembershipType: membershipType
-            });
+            // Extract urlType from metadata
+            const urlType = session.metadata?.urlType || null;
+
+            // Determine membership type - PRIORITY: urlType > getMembershipType
+            let membershipType = 'b2c'; // Default
+            if (urlType) {
+              // Convert urlType (B2C/B2B/B2E) to membershipType (b2c/b2b/b2e)
+              membershipType = urlType.toLowerCase();
+              console.log('✅ Using urlType for membership type (fallback):', {
+                urlType: urlType,
+                membershipType: membershipType
+              });
+            } else {
+              // Fallback to old logic if urlType not provided
+              membershipType = getMembershipType(package, product);
+              console.log('⚠️ urlType not found, using package/product logic (fallback):', {
+                productId: productId,
+                productTargetAudience: product?.targetAudience,
+                packageTargetAudiences: package?.targetAudiences,
+                determinedMembershipType: membershipType
+              });
+            }
+
+            // Validate that user's role matches the membership type
+            const userRole = user.role;
+            let roleMatchesType = false;
+            let errorMessage = '';
+
+            if (membershipType === 'b2c') {
+              roleMatchesType = userRole === 'b2c_user' || userRole === 'admin';
+              if (!roleMatchesType) {
+                if (userRole === 'b2b_user' || userRole === 'b2b_member') {
+                  errorMessage = 'You are a B2B user. You can only purchase B2B products.';
+                } else if (userRole === 'b2e_user' || userRole === 'b2e_member') {
+                  errorMessage = 'You are a B2E user. You can only purchase B2E products.';
+                } else {
+                  errorMessage = 'Your account type does not match the product type. You can only purchase B2C products.';
+                }
+              }
+            } else if (membershipType === 'b2b') {
+              roleMatchesType = userRole === 'b2b_user' || userRole === 'b2b_member' || userRole === 'admin';
+              if (!roleMatchesType) {
+                if (userRole === 'b2c_user') {
+                  errorMessage = 'You are a B2C user. You can only purchase B2C products.';
+                } else if (userRole === 'b2e_user' || userRole === 'b2e_member') {
+                  errorMessage = 'You are a B2E user. You can only purchase B2E products.';
+                } else {
+                  errorMessage = 'Your account type does not match the product type. You can only purchase B2B products.';
+                }
+              }
+            } else if (membershipType === 'b2e') {
+              roleMatchesType = userRole === 'b2e_user' || userRole === 'b2e_member' || userRole === 'admin';
+              if (!roleMatchesType) {
+                if (userRole === 'b2c_user') {
+                  errorMessage = 'You are a B2C user. You can only purchase B2C products.';
+                } else if (userRole === 'b2b_user' || userRole === 'b2b_member') {
+                  errorMessage = 'You are a B2B user. You can only purchase B2B products.';
+                } else {
+                  errorMessage = 'Your account type does not match the product type. You can only purchase B2E products.';
+                }
+              }
+            }
 
             // Determine membership end date - use calculated expiry date from expiryTime or expiryDate
             let membershipEndDate = transaction.contractPeriod.endDate;
@@ -3526,15 +3784,30 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
               membershipEndDate = calculatedExpiryDate;
             }
 
-            // Add membership to user
-            user.memberships.push({
-              packageId: packageId,
-              membershipType: membershipType,
-              status: 'active',
-              startDate: transaction.contractPeriod.startDate,
-              endDate: membershipEndDate,
-            });
-            await user.save();
+            // Add membership ONLY if role matches type
+            if (roleMatchesType) {
+              user.memberships.push({
+                packageId: packageId,
+                membershipType: membershipType,
+                status: 'active',
+                startDate: transaction.contractPeriod.startDate,
+                endDate: membershipEndDate,
+              });
+              await user.save();
+              console.log('✅ Membership added to user (fallback):', {
+                userId: userId,
+                packageId: packageId,
+                membershipType: membershipType,
+                userRole: userRole
+              });
+            } else {
+              console.error('❌ Membership NOT added - role mismatch (fallback):', {
+                userId: userId,
+                userRole: userRole,
+                membershipType: membershipType,
+                errorMessage: errorMessage
+              });
+            }
           }
 
           // Add transaction to organization/school's transactionIds array
