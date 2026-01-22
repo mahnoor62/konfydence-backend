@@ -225,10 +225,22 @@ router.get('/public/game', async (req, res) => {
         // Get cards for the specific level
         if (level === '1' && product.level1 && product.level1.length > 0) {
           cardIds = product.level1.map(id => id.toString());
+          console.log('🎮 Loading Level 1 Cards in DB Order:', {
+            count: cardIds.length,
+            order: cardIds
+          });
         } else if (level === '2' && product.level2 && product.level2.length > 0) {
           cardIds = product.level2.map(id => id.toString());
+          console.log('🎮 Loading Level 2 Cards in DB Order:', {
+            count: cardIds.length,
+            order: cardIds
+          });
         } else if (level === '3' && product.level3 && product.level3.length > 0) {
           cardIds = product.level3.map(id => id.toString());
+          console.log('🎮 Loading Level 3 Cards in DB Order:', {
+            count: cardIds.length,
+            order: cardIds
+          });
         }
       }
       
@@ -279,6 +291,12 @@ router.get('/public/game', async (req, res) => {
         if (card) {
           cards.push(card);
         }
+      });
+      
+      console.log('✅ Cards Sorted in Product Sequence:', {
+        level: level,
+        requestedOrder: cardIds,
+        finalOrder: cards.map(c => ({ id: c._id.toString(), title: c.title }))
       });
     } else {
       // Fallback: if no cardIds order, use fetched cards (shouldn't happen)

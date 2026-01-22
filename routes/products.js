@@ -341,15 +341,27 @@ router.put(
         }
       }
 
-      // Handle level-based card arrays
+      // Handle level-based card arrays - preserve order exactly as received
       if (req.body.level1 !== undefined) {
         updateData.level1 = Array.isArray(req.body.level1) ? req.body.level1 : [];
+        console.log('📝 Level 1 Cards Order (received from frontend):', {
+          count: updateData.level1.length,
+          order: updateData.level1
+        });
       }
       if (req.body.level2 !== undefined) {
         updateData.level2 = Array.isArray(req.body.level2) ? req.body.level2 : [];
+        console.log('📝 Level 2 Cards Order (received from frontend):', {
+          count: updateData.level2.length,
+          order: updateData.level2
+        });
       }
       if (req.body.level3 !== undefined) {
         updateData.level3 = Array.isArray(req.body.level3) ? req.body.level3 : [];
+        console.log('📝 Level 3 Cards Order (received from frontend):', {
+          count: updateData.level3.length,
+          order: updateData.level3
+        });
       }
 
       const product = await Product.findByIdAndUpdate(
@@ -360,6 +372,18 @@ router.put(
       if (!product) {
         return res.status(404).json({ error: 'Product not found' });
       }
+      
+      // Log saved card order to verify sequence is maintained
+      console.log('✅ Product Updated - Card Sequences Saved:', {
+        productId: product._id,
+        level1Count: product.level1?.length || 0,
+        level2Count: product.level2?.length || 0,
+        level3Count: product.level3?.length || 0,
+        level1Order: product.level1,
+        level2Order: product.level2,
+        level3Order: product.level3
+      });
+      
       res.json(product);
     } catch (error) {
       if (error.code === 11000) {
