@@ -1060,6 +1060,14 @@ router.post('/webhook', async (req, res) => {
 
     // Handle Stripe Checkout Session completed
     if (event.type === 'checkout.session.completed') {
+      console.log('🎯 WEBHOOK EVENT: checkout.session.completed RECEIVED', {
+        eventId: event.id,
+        sessionId: event.data.object.id,
+        paymentIntentId: event.data.object.payment_intent,
+        timestamp: new Date().toISOString(),
+        customerEmail: event.data.object.customer_email
+      });
+      
       let session = event.data.object;
       
       // CRITICAL: If metadata is empty or missing, retrieve full session from Stripe API
@@ -1483,7 +1491,7 @@ router.post('/webhook', async (req, res) => {
             return res.json({ received: true, error: 'Error finding product', productId, errorMessage: err.message });
           }
           
-          // Determine transaction type based on urlType from session metadata
+          // Determine transaction type based on urlType, user's schoolId/organizationId, or user role
           const urlType = session.metadata.urlType || null;
           if (urlType === 'B2B') {
             transactionType = 'b2b_contract';
@@ -1492,8 +1500,15 @@ router.post('/webhook', async (req, res) => {
           } else if (urlType === 'B2C') {
             transactionType = 'b2c_purchase';
           } else {
-            // Fallback: determine from user role if urlType is not available
-            if (user.role === 'b2b_user' || user.role === 'b2b_member') {
+            // Fallback: Check if user has schoolId or organizationId first
+            if (user.schoolId) {
+              transactionType = 'b2e_contract';
+            } else if (user.organizationId) {
+              // Check organization segment
+              const Organization = require('../models/Organization');
+              const org = await Organization.findById(user.organizationId);
+              transactionType = org?.segment === 'B2B' ? 'b2b_contract' : 'b2e_contract';
+            } else if (user.role === 'b2b_user' || user.role === 'b2b_member') {
               transactionType = 'b2b_contract';
             } else if (user.role === 'b2e_user' || user.role === 'b2e_member') {
               transactionType = 'b2e_contract';
@@ -1584,18 +1599,49 @@ router.post('/webhook', async (req, res) => {
             product = await Product.findById(productId);
           }
 
-          // Determine transaction type based on USER ROLE (not product/package targetAudience)
-          // This ensures transaction type matches the user who is purchasing
-          if (user.role === 'b2c_user') {
+          // Determine transaction type based on user's schoolId/organizationId first, then USER ROLE
+          console.log('🔍 Determining transaction type (checkout.session.completed):', {
+            userId: user._id,
+            userRole: user.role,
+            hasSchoolId: !!user.schoolId,
+            schoolId: user.schoolId,
+            hasOrganizationId: !!user.organizationId,
+            organizationId: user.organizationId
+          });
+          
+          // Priority 1: Check if user has schoolId or organizationId
+          if (user.schoolId) {
+            transactionType = 'b2e_contract';
+            console.log('✅ Transaction type set from user.schoolId: b2e_contract', { schoolId: user.schoolId });
+          } else if (user.organizationId) {
+            // Check organization segment
+            const Organization = require('../models/Organization');
+            const org = await Organization.findById(user.organizationId);
+            transactionType = org?.segment === 'B2B' ? 'b2b_contract' : 'b2e_contract';
+            console.log('✅ Transaction type set from user.organizationId:', { 
+              organizationId: user.organizationId, 
+              segment: org?.segment, 
+              transactionType 
+            });
+          }
+          // Priority 2: Check user role
+          else if (user.role === 'b2c_user') {
             transactionType = 'b2c_purchase';
+            console.log('✅ Transaction type set from user.role: b2c_purchase', { role: user.role });
           } else if (user.role === 'b2b_user' || user.role === 'b2b_member') {
             transactionType = 'b2b_contract';
+            console.log('✅ Transaction type set from user.role: b2b_contract', { role: user.role });
           } else if (user.role === 'b2e_user' || user.role === 'b2e_member') {
             transactionType = 'b2e_contract';
-          } else {
-            // Fallback to product/package targetAudience if role doesn't match
+            console.log('✅ Transaction type set from user.role: b2e_contract', { role: user.role });
+          } 
+          // Priority 3: Fallback to product/package targetAudience
+          else {
             transactionType = getTransactionType(package, product);
+            console.log('✅ Transaction type set from package/product targetAudience:', transactionType);
           }
+          
+          console.log('🎯 Final transaction type (checkout.session.completed):', transactionType);
           packageType = package.packageType || package.type || package.category || 'standard';
           
           // CRITICAL FIX: If productId is present, check product to determine packageType for digital/digital_physical
@@ -2238,6 +2284,19 @@ router.post('/webhook', async (req, res) => {
         }
 
         // Send transaction success email
+        console.log('📧 PREPARING TO SEND EMAIL (checkout.session.completed):', {
+          transactionId: transaction._id,
+          userId: user._id,
+          userEmail: user.email,
+          transactionType: transaction.type,
+          packageType: transaction.packageType,
+          hasPackageId: !!transaction.packageId,
+          hasCustomPackageId: !!transaction.customPackageId,
+          hasProductId: !!transaction.productId,
+          directProductPurchase: directProductPurchase,
+          timestamp: new Date().toISOString()
+        });
+        
         try {
           let organization = null;
           if (transaction.organizationId) {
@@ -2262,9 +2321,23 @@ router.post('/webhook', async (req, res) => {
                                             !transaction.packageId && 
                                             !transaction.customPackageId && 
                                             transaction.productId;
+          
+          console.log('📧 EMAIL DETAILS:', {
+            hasOrganization: !!organization,
+            packageForEmailType: customPackage ? 'customPackage' : (package ? 'package' : 'empty'),
+            hasProductForEmail: !!productForEmail,
+            isShopPagePurchase: isShopPagePurchaseForEmail
+          });
+          
           await sendTransactionSuccessEmail(transaction, user, packageForEmail, organization, productForEmail, isShopPagePurchaseForEmail);
+          
+          console.log('✅ EMAIL SENT SUCCESSFULLY (checkout.session.completed):', {
+            transactionId: transaction._id,
+            userEmail: user.email,
+            timestamp: new Date().toISOString()
+          });
         } catch (emailError) {
-          console.error('Error sending transaction success email:', emailError);
+          console.error('❌ ERROR SENDING EMAIL (checkout.session.completed):', emailError);
           // Don't fail the transaction if email fails
         }
 
@@ -2536,6 +2609,26 @@ router.post('/webhook', async (req, res) => {
         }
       }
       
+      // IMPORTANT: Skip ALL transaction creation from payment_intent.succeeded
+      // Let checkout.session.completed handle ALL transactions to avoid duplicates
+      console.log('ℹ️ Skipping transaction creation from payment_intent.succeeded - checkout.session.completed will handle it.', {
+        paymentIntentId: paymentIntent.id,
+        userId: userId,
+        userEmail: user?.email,
+        hasSession: !!session,
+        reason: 'Preventing duplicate transactions - checkout.session.completed is the single source of truth'
+      });
+      
+      return res.status(200).json({ 
+        received: true, 
+        processed: false,
+        message: 'Transaction creation skipped - checkout.session.completed will handle it',
+        paymentIntentId: paymentIntent.id
+      });
+      
+      // COMMENTED OUT: Transaction creation from payment_intent.succeeded
+      // This prevents duplicate transactions and email issues
+      /*
       // If we still can't find userId/user, skip transaction creation
       // checkout.session.completed will handle it
       if (!userId || !user) {
@@ -2633,18 +2726,55 @@ router.post('/webhook', async (req, res) => {
             return res.status(200).json({ received: true, error: 'Error finding product', productId, errorMessage: err.message });
           }
           
-          // Determine transaction type from urlType or user role
+          // Determine transaction type from urlType, user's schoolId/organizationId, or user role
           const urlType = sessionMetadata?.urlType || paymentIntent.metadata?.urlType || null;
           let transactionType = 'b2c_purchase';
+          
+          console.log('🔍 Determining transaction type (payment_intent):', {
+            userId: user._id,
+            userRole: user.role,
+            hasSchoolId: !!user.schoolId,
+            schoolId: user.schoolId,
+            hasOrganizationId: !!user.organizationId,
+            organizationId: user.organizationId,
+            urlType: urlType
+          });
+          
+          // Priority 1: Check urlType from metadata
           if (urlType === 'B2B') {
             transactionType = 'b2b_contract';
+            console.log('✅ Transaction type set from urlType: b2b_contract');
           } else if (urlType === 'B2E') {
             transactionType = 'b2e_contract';
-          } else if (user.role === 'b2b_user' || user.role === 'b2b_member') {
+            console.log('✅ Transaction type set from urlType: b2e_contract');
+          } 
+          // Priority 2: Check if user has schoolId or organizationId
+          else if (user.schoolId) {
+            transactionType = 'b2e_contract';
+            console.log('✅ Transaction type set from user.schoolId: b2e_contract', { schoolId: user.schoolId });
+          } else if (user.organizationId) {
+            // Check organization segment
+            const Organization = require('../models/Organization');
+            const org = await Organization.findById(user.organizationId);
+            transactionType = org?.segment === 'B2B' ? 'b2b_contract' : 'b2e_contract';
+            console.log('✅ Transaction type set from user.organizationId:', { 
+              organizationId: user.organizationId, 
+              segment: org?.segment, 
+              transactionType 
+            });
+          }
+          // Priority 3: Fallback to user role
+          else if (user.role === 'b2b_user' || user.role === 'b2b_member') {
             transactionType = 'b2b_contract';
+            console.log('✅ Transaction type set from user.role: b2b_contract', { role: user.role });
           } else if (user.role === 'b2e_user' || user.role === 'b2e_member') {
             transactionType = 'b2e_contract';
+            console.log('✅ Transaction type set from user.role: b2e_contract', { role: user.role });
+          } else {
+            console.log('✅ Transaction type defaulted to: b2c_purchase', { role: user.role });
           }
+          
+          console.log('🎯 Final transaction type (payment_intent):', transactionType);
           
           const isShopPagePurchase = (sessionMetadata?.shopPagePurchase === 'true') || (paymentIntent.metadata?.shopPagePurchase === 'true');
           const metadataPackageType = sessionMetadata?.packageType || paymentIntent.metadata?.packageType || 'physical';
@@ -3052,41 +3182,39 @@ router.post('/webhook', async (req, res) => {
             // Don't fail the transaction if this update fails
           }
 
-          // Send transaction success email
-          try {
-            let organization = null;
-            if (transaction.organizationId) {
-              // Use OrganizationModel3 already declared above
-              organization = await OrganizationModel3.findById(transaction.organizationId);
-            }
-            // For shop page or Products page purchases, fetch product details for email (all product types)
-            let productForEmail = null;
-            const isShopPagePurchaseForEmail = (transaction.type === 'b2c_purchase' || 
-                                               (transaction.packageType && 
-                                                (transaction.packageType === 'digital' || transaction.packageType === 'digital_physical'))) &&
-                                              !transaction.packageId && 
-                                              !transaction.customPackageId && 
-                                              transaction.productId;
-            if (isShopPagePurchaseForEmail && transaction.productId) {
-              const Product = require('../models/Product');
-              productForEmail = await Product.findById(transaction.productId).select('title name description price');
-              console.log('📦 Fetched product for email (webhook):', {
-                productId: transaction.productId,
-                productTitle: productForEmail?.title,
-                productName: productForEmail?.name,
-                packageType: transaction.packageType
-              });
-            } else if (transaction.packageType === 'physical' && transaction.productId) {
-              const Product = require('../models/Product');
-              productForEmail = await Product.findById(transaction.productId).select('title name description price');
-            }
-            await sendTransactionSuccessEmail(transaction, user, package || {}, organization, productForEmail, isShopPagePurchaseForEmail);
-          } catch (emailError) {
-            console.error('Error sending transaction success email:', emailError);
-            // Don't fail the transaction if email fails
-          }
+          // Email is already sent by checkout.session.completed event
+          // Skipping email from payment_intent.succeeded to avoid duplicate emails
+          console.log('ℹ️ Skipping email from payment_intent.succeeded (already sent by checkout.session.completed)');
+          
+          // REMOVED: Send transaction success email
+          // Reason: Duplicate emails issue - checkout.session.completed already sends email
+          // try {
+          //   let organization = null;
+          //   if (transaction.organizationId) {
+          //     organization = await OrganizationModel3.findById(transaction.organizationId);
+          //   }
+          //   let productForEmail = null;
+          //   const isShopPagePurchaseForEmail = (transaction.type === 'b2c_purchase' || 
+          //                                      (transaction.packageType && 
+          //                                       (transaction.packageType === 'digital' || transaction.packageType === 'digital_physical'))) &&
+          //                                     !transaction.packageId && 
+          //                                     !transaction.customPackageId && 
+          //                                     transaction.productId;
+          //   if (isShopPagePurchaseForEmail && transaction.productId) {
+          //     const Product = require('../models/Product');
+          //     productForEmail = await Product.findById(transaction.productId).select('title name description price');
+          //   } else if (transaction.packageType === 'physical' && transaction.productId) {
+          //     const Product = require('../models/Product');
+          //     productForEmail = await Product.findById(transaction.productId).select('title name description price');
+          //   }
+          //   await sendTransactionSuccessEmail(transaction, user, package || {}, organization, productForEmail, isShopPagePurchaseForEmail);
+          // } catch (emailError) {
+          //   console.error('Error sending transaction success email:', emailError);
+          // }
         }
       }
+      */
+      // END OF COMMENTED OUT SECTION - payment_intent.succeeded transaction creation
     }
 
     // Return success response to Stripe
@@ -3327,18 +3455,49 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             await customPackage.save();
           } else if (package) {
             // Handle regular package
-            // Determine transaction type based on USER ROLE (not product/package targetAudience)
-            // This ensures transaction type matches the user who is purchasing
-            if (user.role === 'b2c_user') {
+            // Determine transaction type based on user's schoolId/organizationId first, then USER ROLE
+            console.log('🔍 Determining transaction type (FALLBACK):', {
+              userId: user._id,
+              userRole: user.role,
+              hasSchoolId: !!user.schoolId,
+              schoolId: user.schoolId,
+              hasOrganizationId: !!user.organizationId,
+              organizationId: user.organizationId
+            });
+            
+            // Priority 1: Check if user has schoolId or organizationId
+            if (user.schoolId) {
+              transactionType = 'b2e_contract';
+              console.log('✅ Transaction type set from user.schoolId: b2e_contract (FALLBACK)', { schoolId: user.schoolId });
+            } else if (user.organizationId) {
+              // Check organization segment
+              const Organization = require('../models/Organization');
+              const org = await Organization.findById(user.organizationId);
+              transactionType = org?.segment === 'B2B' ? 'b2b_contract' : 'b2e_contract';
+              console.log('✅ Transaction type set from user.organizationId (FALLBACK):', { 
+                organizationId: user.organizationId, 
+                segment: org?.segment, 
+                transactionType 
+              });
+            }
+            // Priority 2: Check user role
+            else if (user.role === 'b2c_user') {
               transactionType = 'b2c_purchase';
+              console.log('✅ Transaction type set from user.role: b2c_purchase (FALLBACK)', { role: user.role });
             } else if (user.role === 'b2b_user' || user.role === 'b2b_member') {
               transactionType = 'b2b_contract';
+              console.log('✅ Transaction type set from user.role: b2b_contract (FALLBACK)', { role: user.role });
             } else if (user.role === 'b2e_user' || user.role === 'b2e_member') {
               transactionType = 'b2e_contract';
-            } else {
-              // Fallback to product/package targetAudience if role doesn't match
+              console.log('✅ Transaction type set from user.role: b2e_contract (FALLBACK)', { role: user.role });
+            } 
+            // Priority 3: Fallback to product/package targetAudience
+            else {
               transactionType = getTransactionType(package, product);
+              console.log('✅ Transaction type set from package/product targetAudience (FALLBACK):', transactionType);
             }
+            
+            console.log('🎯 Final transaction type (FALLBACK):', transactionType);
             packageType = package.packageType || package.type || package.category || 'standard';
             
             // CRITICAL FIX: If productId is present, check product to determine packageType for digital/digital_physical
@@ -3565,7 +3724,7 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
               uniqueCode = undefined; // No unique code for physical products
             }
             
-            // Determine transaction type based on urlType from session metadata
+            // Determine transaction type based on urlType, user's schoolId/organizationId, or user role
             const urlType = session.metadata.urlType || null;
             if (urlType === 'B2B') {
               transactionType = 'b2b_contract';
@@ -3574,8 +3733,15 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             } else if (urlType === 'B2C') {
               transactionType = 'b2c_purchase';
             } else {
-              // Fallback: determine from user role if urlType is not available
-              if (user.role === 'b2b_user' || user.role === 'b2b_member') {
+              // Fallback: Check if user has schoolId or organizationId first
+              if (user.schoolId) {
+                transactionType = 'b2e_contract';
+              } else if (user.organizationId) {
+                // Check organization segment
+                const Organization = require('../models/Organization');
+                const org = await Organization.findById(user.organizationId);
+                transactionType = org?.segment === 'B2B' ? 'b2b_contract' : 'b2e_contract';
+              } else if (user.role === 'b2b_user' || user.role === 'b2b_member') {
                 transactionType = 'b2b_contract';
               } else if (user.role === 'b2e_user' || user.role === 'b2e_member') {
                 transactionType = 'b2e_contract';
@@ -3958,41 +4124,36 @@ router.get('/transaction-by-session/:sessionId', authenticateToken, async (req, 
             }
           }
 
-          // Send transaction success email
-          try {
-            let organization = null;
-            if (transaction.organizationId) {
-              // Use OrganizationModel3 already declared above
-              organization = await OrganizationModel3.findById(transaction.organizationId);
-            }
-            // For custom packages, pass customPackage instead of package
-            const packageForEmail = customPackage || package || {};
-            // For shop page or Products page purchases, fetch product details for email (all product types)
-            let productForEmail = null;
-            const isShopPagePurchaseForEmail = (transaction.type === 'b2c_purchase' || 
-                                               (transaction.packageType && 
-                                                (transaction.packageType === 'digital' || transaction.packageType === 'digital_physical'))) &&
-                                              !transaction.packageId && 
-                                              !transaction.customPackageId && 
-                                              transaction.productId;
-            if (isShopPagePurchaseForEmail && transaction.productId) {
-              const Product = require('../models/Product');
-              productForEmail = await Product.findById(transaction.productId).select('title name description price');
-              console.log('📦 Fetched product for email (fallback):', {
-                productId: transaction.productId,
-                productTitle: productForEmail?.title,
-                productName: productForEmail?.name,
-                packageType: transaction.packageType
-              });
-            } else if (transaction.packageType === 'physical' && transaction.productId) {
-              const Product = require('../models/Product');
-              productForEmail = await Product.findById(transaction.productId).select('title name description price');
-            }
-            await sendTransactionSuccessEmail(transaction, user, packageForEmail, organization, productForEmail, isShopPagePurchaseForEmail);
-          } catch (emailError) {
-            console.error('Error sending transaction success email:', emailError);
-            // Don't fail the transaction if email fails
-          }
+          // Email is already sent by checkout.session.completed event
+          // Skipping email from FALLBACK method to avoid duplicate emails
+          console.log('ℹ️ Skipping email from FALLBACK (already sent by checkout.session.completed)');
+          
+          // REMOVED: Send transaction success email
+          // Reason: Duplicate emails issue - checkout.session.completed already sends email
+          // try {
+          //   let organization = null;
+          //   if (transaction.organizationId) {
+          //     organization = await OrganizationModel3.findById(transaction.organizationId);
+          //   }
+          //   const packageForEmail = customPackage || package || {};
+          //   let productForEmail = null;
+          //   const isShopPagePurchaseForEmail = (transaction.type === 'b2c_purchase' || 
+          //                                      (transaction.packageType && 
+          //                                       (transaction.packageType === 'digital' || transaction.packageType === 'digital_physical'))) &&
+          //                                     !transaction.packageId && 
+          //                                     !transaction.customPackageId && 
+          //                                     transaction.productId;
+          //   if (isShopPagePurchaseForEmail && transaction.productId) {
+          //     const Product = require('../models/Product');
+          //     productForEmail = await Product.findById(transaction.productId).select('title name description price');
+          //   } else if (transaction.packageType === 'physical' && transaction.productId) {
+          //     const Product = require('../models/Product');
+          //     productForEmail = await Product.findById(transaction.productId).select('title name description price');
+          //   }
+          //   await sendTransactionSuccessEmail(transaction, user, packageForEmail, organization, productForEmail, isShopPagePurchaseForEmail);
+          // } catch (emailError) {
+          //   console.error('Error sending transaction success email:', emailError);
+          // }
 
           console.log('⚠️ Transaction created via FALLBACK (SECONDARY METHOD) for session:', {
             sessionId: session.id,

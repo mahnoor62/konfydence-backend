@@ -1309,8 +1309,12 @@ The Konfydence Team`;
       emailSubject = `Payment Successful - ${product.title || product.name || 'Product Purchase'}`;
     } else if (packageType === 'physical' && product) {
       emailSubject = `Payment Successful - ${product.title || product.name || 'Physical Card Game Kit'}`;
+    } else if (packageType === 'physical') {
+      emailSubject = 'Payment Successful - Physical Card Game Kit';
+    } else if (transaction.uniqueCode) {
+      emailSubject = `Payment Successful - Your Unique Code: ${transaction.uniqueCode}`;
     } else {
-      emailSubject = `Payment Successful - Your Unique Code: ${transaction.uniqueCode || 'N/A'}`;
+      emailSubject = 'Payment Successful';
     }
 
     const mailOptions = {
