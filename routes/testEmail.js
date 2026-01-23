@@ -47,7 +47,7 @@ router.post('/test-email', async (req, res) => {
     `;
 
     const info = await transporter.sendMail({
-      from: `"Konfydence" <${process.env.SMTP_USER}>`,
+      from: `"Konfydence" <${process.env.MAIL_FROM}>`,
       to: to,
       subject: 'Test Email - Konfydence Email Service',
       html: testEmailHtml,

@@ -743,7 +743,7 @@ router.post(
 
           const transporter = createTransporter();
           const info = await transporter.sendMail({
-            from: `"Konfydence" <${process.env.SMTP_USER}>`,
+            from: `"Konfydence" <${process.env.MAIL_FROM}>`,
             to: email,
             subject: 'Verify Your Email Address - Konfydence',
             html: emailHtml,
@@ -1194,7 +1194,7 @@ router.post('/user/resend-verification', async (req, res) => {
 
         const transporter = createTransporter();
         const info = await transporter.sendMail({
-          from: `"Konfydence" <${process.env.SMTP_USER}>`,
+          from: `"Konfydence" <${process.env.MAIL_FROM}>`,
           to: email,
           subject: 'Verify Your Email Address - Konfydence',
           html: emailHtml
@@ -1316,10 +1316,10 @@ router.post('/user/forgot-password', async (req, res) => {
 </html>
       `;
 
-      if (process.env.SMTP_USER && process.env.SMTP_PASS) {
+      if (process.env.MAIL_FROM && process.env.SMTP_PASS) {
         const transporter = createTransporter();
         await transporter.sendMail({
-          from: `"Konfydence" <${process.env.SMTP_USER}>`,
+          from: `"Konfydence" <${process.env.MAIL_FROM}>`,
           to: email,
           subject: 'Reset Your Password - Konfydence',
           html: emailHtml,
@@ -1822,7 +1822,7 @@ router.post('/member/requests/:requestId/:action', authenticateToken, async (req
 
           const transporter = createTransporter();
           await transporter.sendMail({
-            from: `"Konfydence" <${process.env.SMTP_USER}>`,
+            from: `"Konfydence" <${process.env.MAIL_FROM}>`,
             to: memberUser.email,
             subject: `Membership Approved - ${orgName}`,
             html: emailHtml

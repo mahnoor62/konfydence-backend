@@ -3,14 +3,14 @@ const nodemailer = require('nodemailer');
 // Email configuration - update these in your .env file
 const createTransporter = () => {
   const config = {
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.SMTP_PORT) || 587,
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT),
     secure: false, // true for 465, false for other ports
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
-    requireTLS: true,
+    // requireTLS: true,
     // Add connection timeout and greeting timeout
     // connectionTimeout: 10000, // 10 seconds
     // greetingTimeout: 10000, // 10 seconds
@@ -530,7 +530,7 @@ The Konfydence Team
     };
 
     console.log('📧 Sending email via SMTP:', {
-      from: process.env.SMTP_USER,
+      from: process.env.MAIL_FROM,
       to: request.contactEmail,
       host: process.env.SMTP_HOST || 'smtp.gmail.com'
     });
@@ -1334,7 +1334,7 @@ The Konfydence Team`;
 
     console.log('Attempting to send transaction success email:', {
       to: user.email,
-      from: process.env.SMTP_USER,
+      from: process.env.MAIL_FROM,
       uniqueCode: transaction.uniqueCode,
       packageName: package?.name || (transaction.packageType === 'physical' ? 'Physical Card Game Kit' : 'N/A'),
       smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com'
@@ -1345,7 +1345,7 @@ The Konfydence Team`;
     console.log('Transaction success email sent successfully:', {
       messageId: info.messageId,
       to: user.email,
-      from: process.env.SMTP_USER,
+      from: process.env.MAIL_FROM,
       uniqueCode: transaction.uniqueCode,
       accepted: info.accepted,
       rejected: info.rejected,
