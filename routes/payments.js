@@ -323,7 +323,7 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       return res.status(500).json({ error: 'Stripe is not configured. Please set STRIPE_SECRET_KEY in environment variables.' });
     }
 
-    const { packageId, productId, customPackageId, urlType, directProductPurchase } = req.body;
+    const { packageId, productId, customPackageId, urlType, directProductPurchase, shopPagePurchase } = req.body;
     
     // Allow direct product purchase (for physical products) without package
     if (!packageId && !customPackageId && !directProductPurchase) {
@@ -336,7 +336,8 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
     }
 
     // CRITICAL: Validate urlType matches user role (if urlType is provided)
-    if (urlType) {
+    // SKIP validation for shop page purchases (shopPagePurchase flag)
+    if (urlType && !shopPagePurchase) {
       const userRole = user.role;
       let urlTypeMatchesRole = false;
 
@@ -380,6 +381,8 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
         userRole,
         urlTypeMatchesRole
       });
+    } else if (shopPagePurchase) {
+      console.log('✅ Shop page purchase - skipping role validation');
     }
 
     // Validate user role and product/package compatibility
@@ -409,7 +412,8 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       }
       
       // If URL type matches user role, skip product category check (user chose correct type)
-      if (!urlTypeMatchesRole && !directProductPurchase) {
+      // SKIP all product validation for shop page purchases
+      if (!urlTypeMatchesRole && !directProductPurchase && !shopPagePurchase) {
         // Check if user can purchase this product based on their role
         // Support both single value and array for targetAudience
         let productTargetAudiences = product.targetAudience || product.category;
@@ -450,7 +454,8 @@ router.post('/create-checkout-session', authenticateToken, async (req, res) => {
       }
       
       // For direct product purchases, allow if URL type matches or if product targetAudience matches user role
-      if (directProductPurchase && !urlTypeMatchesRole) {
+      // SKIP validation for shop page purchases
+      if (directProductPurchase && !urlTypeMatchesRole && !shopPagePurchase) {
         let productTargetAudiences = product.targetAudience || product.category;
         if (!Array.isArray(productTargetAudiences)) {
           productTargetAudiences = productTargetAudiences ? [productTargetAudiences] : [];
@@ -1236,7 +1241,7 @@ router.post('/webhook', async (req, res) => {
         let uniqueCode = session.metadata?.uniqueCode || null;
         const billingType = session.metadata?.billingType || 'one_time';
         const directProductPurchase = session.metadata?.directProductPurchase === 'true';
-        const seatLimit = directProductPurchase ? 1 : (parseInt(session.metadata?.seatLimit) || 5);
+        const seatLimit = parseInt(session.metadata?.seatLimit) || 5;
         const urlType = session.metadata?.urlType || null; // Extract urlType from metadata
         
         // Log metadata received from webhook
@@ -2657,7 +2662,7 @@ router.post('/webhook', async (req, res) => {
         const uniqueCode = sessionMetadata?.uniqueCode || paymentIntent.metadata?.uniqueCode;
         const billingType = sessionMetadata?.billingType || paymentIntent.metadata?.billingType || 'one_time';
         const directProductPurchase = (sessionMetadata?.directProductPurchase === 'true') || (paymentIntent.metadata?.directProductPurchase === 'true');
-        const seatLimit = directProductPurchase ? 1 : (parseInt(sessionMetadata?.seatLimit || paymentIntent.metadata?.seatLimit) || 5);
+        const seatLimit = parseInt(sessionMetadata?.seatLimit || paymentIntent.metadata?.seatLimit) || 5;
 
         // CRITICAL: Check if transaction with same uniqueCode already exists (prevent duplicates)
         if (uniqueCode && uniqueCode !== '' && uniqueCode !== 'null' && uniqueCode !== 'undefined') {

@@ -10,21 +10,22 @@ const createTransporter = () => {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
+    requireTLS: true,
     // Add connection timeout and greeting timeout
-    connectionTimeout: 10000, // 10 seconds
-    greetingTimeout: 10000, // 10 seconds
-    // Add debug option for troubleshooting (only in development)
-    debug: process.env.NODE_ENV === 'development',
-    logger: process.env.NODE_ENV === 'development'
+    // connectionTimeout: 10000, // 10 seconds
+    // greetingTimeout: 10000, // 10 seconds
+    // // Add debug option for troubleshooting (only in development)
+    // debug: process.env.NODE_ENV === 'development',
+    // logger: process.env.NODE_ENV === 'development'
   };
 
-  console.log('Creating SMTP transporter:', {
-    host: config.host,
-    port: config.port,
-    secure: config.secure,
-    user: config.auth.user ? `${config.auth.user.substring(0, 3)}***` : 'Not set',
-    hasPassword: !!config.auth.pass
-  });
+  // console.log('Creating SMTP transporter:', {
+  //   host: config.host,
+  //   port: config.port,
+  //   secure: config.secure,
+  //   user: config.auth.user ? `${config.auth.user.substring(0, 3)}***` : 'Not set',
+  //   hasPassword: !!config.auth.pass
+  // });
 
   return nodemailer.createTransport(config);
 };
@@ -227,7 +228,7 @@ const sendStatusUpdateEmail = async (request, newStatus, adminNotes) => {
     const emailHtml = createEmailTemplate(request, newStatus, adminNotes);
 
     const mailOptions = {
-      from: `"Konfydence" <${process.env.SMTP_USER}>`,
+      from: `"Konfydence" <${process.env.MAIL_FROM}>`,
       to: request.contactEmail,
       subject: `Custom Package Request Update - ${getStatusLabel(newStatus)}`,
       html: emailHtml,
@@ -493,7 +494,7 @@ const sendCustomPackageCreatedEmail = async (request, customPackage) => {
     const emailHtml = createCustomPackageEmailTemplate(request, customPackage);
 
     const mailOptions = {
-      from: `"Konfydence" <${process.env.SMTP_USER}>`,
+      from: `"Konfydence" <${process.env.MAIL_FROM}>`,
       to: request.contactEmail,
       subject: `Your Custom Package Has Been Created - ${request.organizationName}`,
       html: emailHtml,
@@ -1318,7 +1319,7 @@ The Konfydence Team`;
     }
 
     const mailOptions = {
-      from: `"Konfydence" <${process.env.SMTP_USER}>`,
+      from: `"Konfydence" <${process.env.MAIL_FROM}>`,
       to: user.email,
       subject: emailSubject,
       html: emailHtml,
@@ -1458,7 +1459,7 @@ const sendMembershipTerminationEmail = async (member, organizationName, schoolNa
     `;
 
     const mailOptions = {
-      from: `"Konfydence" <${process.env.SMTP_USER}>`,
+      from: `"Konfydence" <${process.env.MAIL_FROM}>`,
       to: member.email,
       subject: `Membership Terminated - ${orgOrSchoolName}`,
       html: htmlContent,
@@ -1643,7 +1644,7 @@ const sendOrganizationCreatedEmail = async (user, organization, password) => {
     `;
 
     const mailOptions = {
-      from: `"Konfydence" <${process.env.SMTP_USER}>`,
+      from: `"Konfydence" <${process.env.MAIL_FROM}>`,
       to: user.email,
       subject: `Your Organization Has Been Created - ${organization.name}`,
       html: htmlContent,
@@ -1788,7 +1789,7 @@ const sendDemoRequestConfirmationEmail = async (firstName, email) => {
     const emailHtml = createDemoRequestEmailTemplate(firstName.trim(), email);
 
     const mailOptions = {
-      from: `"Konfydence" <${process.env.SMTP_USER}>`,
+      from: `"Konfydence" <${process.env.MAIL_FROM}>`,
       to: email,
       subject: "We've received your demo request",
       html: emailHtml,
