@@ -12,7 +12,7 @@ router.post(
   [
     body('firstName').notEmpty().withMessage('First name is required'),
     body('lastName').notEmpty().withMessage('Last name is required'),
-    body('email').isEmail(),
+    body('email').isEmail().withMessage('Please provide a valid email address'),
     body('topic').isIn([
       'b2b_demo',
       'b2c_question',
@@ -27,8 +27,9 @@ router.post(
       'demo-families',
       'demo-schools',
       'demo-businesses',
-      'CoMaSi'
-    ]),
+      'CoMaSi',
+      'ambassador-program'
+    ]).withMessage('Please select a valid topic from the dropdown'),
     body('message').optional()
   ], // Validation updated
   async (req, res) => {
@@ -94,6 +95,7 @@ router.post(
         'b2c_question': 'other',
         'partnerships': 'other',
         'media-press': 'other',
+        'ambassador-program': 'other',
         'other': 'other'
       };
 

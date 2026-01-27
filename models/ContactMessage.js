@@ -23,7 +23,8 @@ const ContactMessageSchema = new Schema(
         'media-press',
         'demo-families',
         'demo-schools',
-        'demo-businesses'
+        'demo-businesses',
+        'ambassador-program'
       ],
       required: true
     },
