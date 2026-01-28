@@ -63,6 +63,7 @@ router.get('/', optionalAuth, async (req, res) => {
           .populate('level1', 'title category targetAudiences tags')
           .populate('level2', 'title category targetAudiences tags')
           .populate('level3', 'title category targetAudiences tags')
+          .populate('linkedCustomRequestId', 'organizationName contactName status')
           .sort({ createdAt: -1 })
           .skip((page - 1) * limit)
           .limit(limit),
@@ -86,6 +87,7 @@ router.get('/', optionalAuth, async (req, res) => {
       .populate('level1', 'title category targetAudiences tags')
       .populate('level2', 'title category targetAudiences tags')
       .populate('level3', 'title category targetAudiences tags')
+      .populate('linkedCustomRequestId', 'organizationName contactName status')
       .sort({ createdAt: -1 });
     res.json(products);
   } catch (error) {
@@ -142,7 +144,8 @@ router.get('/slug/:slug', optionalAuth, async (req, res) => {
       .populate('allowedInstitutes', 'name')
       .populate('level1', 'title category targetAudiences tags')
       .populate('level2', 'title category targetAudiences tags')
-      .populate('level3', 'title category targetAudiences tags');
+      .populate('level3', 'title category targetAudiences tags')
+      .populate('linkedCustomRequestId', 'organizationName contactName status');
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
@@ -160,7 +163,8 @@ router.get('/:id', async (req, res) => {
       .populate('allowedInstitutes', 'name')
       .populate('level1', 'title category targetAudiences tags')
       .populate('level2', 'title category targetAudiences tags')
-      .populate('level3', 'title category targetAudiences tags');
+      .populate('level3', 'title category targetAudiences tags')
+      .populate('linkedCustomRequestId', 'organizationName contactName status');
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
@@ -231,6 +235,11 @@ router.post(
         }
         if (Array.isArray(req.body.allowedInstitutes)) {
           productData.allowedInstitutes = req.body.allowedInstitutes;
+        }
+        if (req.body.linkedCustomRequestId) {
+          productData.linkedCustomRequestId = req.body.linkedCustomRequestId;
+        } else {
+          productData.linkedCustomRequestId = null;
         }
       } else {
         productData.allowedOrganizations = [];
@@ -362,6 +371,11 @@ router.put(
           count: updateData.level3.length,
           order: updateData.level3
         });
+      }
+      // linkedCustomRequestId (optional)
+      if (req.body.linkedCustomRequestId !== undefined) {
+        updateData.linkedCustomRequestId = req.body.linkedCustomRequestId ? req.body.linkedCustomRequestId : null;
+        console.log('📝 linkedCustomRequestId (received):', updateData.linkedCustomRequestId);
       }
 
       const product = await Product.findByIdAndUpdate(

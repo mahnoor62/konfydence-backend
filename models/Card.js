@@ -84,6 +84,12 @@ const CardSchema = new Schema(
       type: Date,
       default: null
     }
+    ,
+    customPackageRequestId: {
+      type: Schema.Types.ObjectId,
+      ref: 'CustomPackageRequest',
+      default: null
+    }
   },
   { timestamps: true }
 );

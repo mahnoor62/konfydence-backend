@@ -334,6 +334,11 @@ router.get('/', authenticateToken, checkPermission('cards'), async (req, res) =>
   try {
     const { status, category, targetAudience, tag, search } = req.query;
     const query = {};
+    
+    // Support visibility filter (public | internal | custom_only)
+    if (req.query.visibility) {
+      query.visibility = req.query.visibility;
+    }
 
     if (status) query.status = status;
     if (category) query.category = category;
@@ -348,8 +353,10 @@ router.get('/', authenticateToken, checkPermission('cards'), async (req, res) =>
 
     // Filter out soft deleted cards for admin panel
     query.isDeleted = { $ne: true };
-
-    const cards = await Card.find(query).sort({ updatedAt: -1 });
+    // Populate linked custom package request (for admin view)
+    const cards = await Card.find(query)
+      .populate('customPackageRequestId', 'organizationName contactName status')
+      .sort({ updatedAt: -1 });
     res.json(cards);
   } catch (error) {
     console.error('Error fetching cards:', error);
@@ -444,6 +451,8 @@ router.post(
         isDemo: req.body.isDemo || false,
         tags: req.body.tags || [],
         question: question
+      ,
+      customPackageRequestId: req.body.customPackageRequestId || null
       };
       
       console.log('Card data to save:', JSON.stringify(cardData, null, 2));
@@ -497,6 +506,7 @@ router.put(
       if (req.body.targetAudiences !== undefined) updateData.targetAudiences = req.body.targetAudiences;
       if (req.body.isDemo !== undefined) updateData.isDemo = req.body.isDemo;
       if (req.body.tags !== undefined) updateData.tags = req.body.tags;
+      if (req.body.customPackageRequestId !== undefined) updateData.customPackageRequestId = req.body.customPackageRequestId || null;
       
       // Only update question if it is explicitly provided
       if (req.body.question !== undefined) {

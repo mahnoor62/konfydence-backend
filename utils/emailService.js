@@ -42,13 +42,17 @@ const colors = {
 
 // Helper function to get logo URL
 const getLogoUrl = () => {
-  const backendUrl = process.env.BACKEND_URL;
-  return `${backendUrl}/public/logo.png`;
+  // Prefer frontend URL for public assets (logo lives in frontend public/)
+  const frontendUrl = process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || process.env.BACKEND_URL || '';
+  // Next/Frontend serves public assets at root: /logo.png
+  return `${frontendUrl.replace(/\/$/, '')}/logo.png`;
 };
 
 // Helper function to create email header with logo and text
-const createEmailHeader = () => { 
+// If logoCid is provided, use CID embedded image instead of external URL
+const createEmailHeader = (logoCid) => { 
   const logoUrl = getLogoUrl();
+  const imgSrc = logoCid ? `cid:${logoCid}` : logoUrl;
   return `
           <!-- Header with Logo -->
           <tr>
@@ -56,7 +60,7 @@ const createEmailHeader = () => {
               <table role="presentation" style="width: 100%; border-collapse: collapse;">
                 <tr>
                   <td style="width: 80px; vertical-align: middle; padding-right: 15px;">
-                    <img src="${logoUrl}" alt="Konfydence Logo" style="max-width: 60px; height: auto; display: block;" />
+                    <img src="${imgSrc}" alt="Konfydence Logo" style="max-width: 60px; height: auto; display: block;" />
                   </td>
                   <td style="vertical-align: middle; text-align: center;">
                     <h1 style="margin: 0; color: ${colors.white}; font-size: 28px; font-weight: 700; line-height: 1.2;">Konfydence</h1>
@@ -1832,5 +1836,6 @@ module.exports = {
   sendOrganizationCreatedEmail,
   sendDemoRequestConfirmationEmail,
   createTransporter,
+  createEmailHeader,
 };
 

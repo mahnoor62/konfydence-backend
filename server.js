@@ -133,6 +133,10 @@ app.use('/api/test', require('./routes/testEmail'));
 app.use('/api/profile', require('./routes/profileUpload'));
 app.use('/api/payments', require('./routes/payments'));
 app.use('/api/free-trial', require('./routes/freeTrial'));
+// Email resources route
+app.use('/api', require('./routes/emailResources'));
+// PDF index route
+app.use('/api', require('./routes/pdfIndex'));
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);

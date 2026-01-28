@@ -142,6 +142,7 @@ router.post(
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const { status, organizationName, organizationId, schoolId } = req.query;
+    console.log('API: GET /custom-package-requests called with query:', JSON.stringify(req.query));
     const query = {};
     
     // Super admin can see all, but organization/school admins see only their requests
@@ -230,6 +231,11 @@ router.get('/', authenticateToken, async (req, res) => {
     });
     
     console.log(`Found ${requests.length} total requests, ${activeRequests.length} active requests for user ${req.userId}`);
+    // Log basic info about active requests and their requested card counts
+    activeRequests.forEach(r => {
+      const cards = (r.requestedModifications && r.requestedModifications.cardsToAdd) || [];
+      console.log(`  Request ${r._id} (org:${r.organizationId || r.organizationName || 'N/A'} school:${r.schoolId || 'N/A'}) -> cardsToAdd: ${cards.length}`);
+    });
     res.json(activeRequests);
   } catch (error) {
     console.error('Error fetching custom package requests:', error);
@@ -259,6 +265,55 @@ router.get('/:id', authenticateToken, async (req, res) => {
     res.json(request);
   } catch (error) {
     console.error('Error fetching custom package request:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Return full card documents for a specific custom package request (admin convenience)
+router.get('/:id/cards', authenticateToken, async (req, res) => {
+  try {
+    console.log('API: GET /custom-package-requests/:id/cards called for id:', req.params.id);
+    const request = await CustomPackageRequest.findById(req.params.id)
+      .populate({
+        path: 'requestedModifications.cardsToAdd',
+        model: 'Card',
+        select: '_id title category targetAudiences question'
+      });
+
+    if (!request) {
+      return res.status(404).json({ error: 'Request not found' });
+    }
+
+    // Start with cards explicitly listed in requestedModifications.cardsToAdd (if any)
+    const listedCards = Array.isArray(request.requestedModifications?.cardsToAdd)
+      ? request.requestedModifications.cardsToAdd
+      : [];
+
+    // Also include any Card documents that were created and linked to this request via customPackageRequestId
+    const linkedCards = await Card.find({ customPackageRequestId: req.params.id })
+      .select('_id title category targetAudiences question')
+      .lean();
+
+    // Merge lists, avoiding duplicates by _id
+    const mergedById = {};
+    listedCards.forEach(c => {
+      const id = c && (c._id ? String(c._id) : String(c));
+      if (id) mergedById[id] = c;
+    });
+    linkedCards.forEach(c => {
+      const id = c && (c._id ? String(c._id) : String(c));
+      if (id && !mergedById[id]) mergedById[id] = c;
+    });
+
+    const cards = Object.values(mergedById);
+    if (!cards || cards.length === 0) {
+      console.log(`  No cards found for request ${req.params.id} - returning explicit empty response`);
+      return res.status(200).json({ message: 'no_cards_created', cards: [] });
+    }
+    console.log(`  Returning ${cards.length} cards for request ${req.params.id}:`, cards.map(c => String(c._id)));
+    res.json(cards);
+  } catch (error) {
+    console.error('Error fetching cards for custom package request:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });

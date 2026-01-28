@@ -56,6 +56,13 @@ const ProductSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: 'Card'
     }]
+    ,
+    // Optionally link a product to a specific custom package request (for private products)
+    linkedCustomRequestId: {
+      type: Schema.Types.ObjectId,
+      ref: 'CustomPackageRequest',
+      default: null
+    }
   },
   { timestamps: true }
 );
