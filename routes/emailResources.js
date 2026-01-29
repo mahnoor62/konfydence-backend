@@ -119,14 +119,22 @@ router.post('/email-resources', async (req, res) => {
     const publicPdfsDir = process.env.PDFS_DIR
       ? path.resolve(process.env.PDFS_DIR)
       : path.join(process.cwd(), '..', 'web', 'public', 'pdfs');
+
+    console.log(`email-resources: preparing attachments for bundleKey=${bundleKey}, email=${email}`);
+    console.log('email-resources: publicPdfsDir =', publicPdfsDir);
+    console.log('email-resources: found files from index =', found);
+
     for (const f of found) {
       const absPath = path.join(publicPdfsDir, f);
       if (fs.existsSync(absPath)) {
         attachments.push({ filename: path.basename(f), path: absPath });
+        console.log('email-resources: attaching file:', { file: f, absPath });
       } else {
-        console.warn('Attachment file missing on disk, skipping:', absPath);
+        console.warn('email-resources: Attachment file missing on disk, skipping:', { file: f, absPath });
       }
     }
+
+    console.log('email-resources: final attachments list =', attachments.map(a => a.path));
 
     const transporter = emailService.createTransporter();
     const mailOptions = {
