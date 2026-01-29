@@ -72,8 +72,8 @@ router.post('/email-resources', async (req, res) => {
       return res.status(200).json({ success: false, message: 'No files found for this bundle' });
     }
 
-    // Build absolute URLs using FRONTEND_URL or localhost fallback
-    const frontendUrl = process.env.FRONTEND_URL;
+    // Build absolute URLs using FRONTEND_URL or NEXT_PUBLIC_FRONTEND_URL, fallback to localhost:3000 for dev
+    const frontendUrl = (process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
     const linksHtml = found.map((f) => {
       const url = `${frontendUrl}/pdfs/${encodeURI(f)}`;
       const name = f.split('/').pop();
@@ -109,10 +109,13 @@ router.post('/email-resources', async (req, res) => {
       return res.status(500).json({ success: false, message: 'Email service not configured on backend' });
     }
 
-    // Prepare attachments for existing files
+    // Prepare attachments for existing files. Allow overriding PDFs directory via env.
     const attachments = [];
+    const publicPdfsDir = process.env.PDFS_DIR
+      ? path.resolve(process.env.PDFS_DIR)
+      : path.join(process.cwd(), '..', 'web', 'public', 'pdfs');
     for (const f of found) {
-      const absPath = path.join(process.cwd(), '..', 'web', 'public', 'pdfs', f);
+      const absPath = path.join(publicPdfsDir, f);
       if (fs.existsSync(absPath)) {
         attachments.push({ filename: path.basename(f), path: absPath });
       } else {

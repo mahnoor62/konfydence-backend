@@ -4,7 +4,11 @@ const path = require('path');
 const router = express.Router();
 
 async function listPdfFiles() {
-  const publicPdfsDir = path.join(process.cwd(), '..', 'web', 'public', 'pdfs');
+  // Allow overriding the PDFs directory via env (useful in deployments).
+  // Default: ../web/public/pdfs relative to backend directory.
+  const publicPdfsDir = process.env.PDFS_DIR
+    ? path.resolve(process.env.PDFS_DIR)
+    : path.join(process.cwd(), '..', 'web', 'public', 'pdfs');
   const files = [];
   async function walk(dir, base) {
     const entries = await fs.promises.readdir(dir, { withFileTypes: true });
