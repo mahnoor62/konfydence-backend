@@ -1754,13 +1754,28 @@ router.post('/member/requests/:requestId/:action', authenticateToken, async (req
         });
       }
 
-      // Send approval email with login code
+      // Send approval email with login code and transaction information
       try {
         if (process.env.SMTP_USER && process.env.SMTP_PASS) {
           const loginCode = organization ? organization.uniqueCode : school.uniqueCode;
           const orgName = organization ? organization.name : school.name;
           const verificationUrl = `${process.env.FRONTEND_URL}/login`;
-          
+
+          // Find latest paid transaction for this organization/school (if any)
+          const Transaction = require('../models/Transaction');
+          let latestTx = null;
+          if (organization) {
+            latestTx = await Transaction.findOne({ organizationId: organization._id, status: 'paid' }).sort({ createdAt: -1 }).lean();
+          }
+          if (!latestTx && school) {
+            latestTx = await Transaction.findOne({ schoolId: school._id, status: 'paid' }).sort({ createdAt: -1 }).lean();
+          }
+
+          const txCode = latestTx?.uniqueCode || null;
+          const txSeats = latestTx?.maxSeats || (organization?.seatUsage?.seatLimit || null);
+          const approverName = user.name || 'Administrator';
+          const approverEmail = user.email || null;
+
           const emailHtml = `
 <!DOCTYPE html>
 <html>
@@ -1768,54 +1783,53 @@ router.post('/member/requests/:requestId/:action', authenticateToken, async (req
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Membership Approved</title>
+  <style>
+    body { margin:0; padding:0; font-family: Arial, sans-serif; background-color: #F5F8FB; }
+    .container { width:100%; padding:20px; box-sizing:border-box; }
+    .card { max-width:600px; margin:0 auto; background:#fff; border-radius:8px; overflow:hidden; box-shadow:0 4px 6px rgba(0,0,0,0.1); }
+    .hero { background: linear-gradient(135deg, #063C5E 0%, #0B7897 100%); color:#fff; padding:30px; text-align:center; }
+    .content { padding:30px; color:#333; }
+    .highlight { background:#F5F8FB; padding:16px; border-radius:6px; border-left:4px solid #0B7897; margin:18px 0; }
+    .btn { display:inline-block; padding:12px 24px; background:#0B7897; color:#fff; border-radius:6px; text-decoration:none; font-weight:600; }
+    .muted { color:#666; font-size:14px; }
+  </style>
 </head>
-<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #F5F8FB;">
-  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #F5F8FB; padding: 20px;">
-    <tr>
-      <td align="center" style="padding: 20px 0;">
-        <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: #FFFFFF; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-          <tr>
-            <td style="background: linear-gradient(135deg, #063C5E 0%, #0B7897 100%); padding: 30px; text-align: center;">
-              <h1 style="margin: 0; color: #FFFFFF; font-size: 28px; font-weight: 700;">Konfydence</h1>
-              <p style="margin: 5px 0 0 0; color: #FFD700; font-size: 14px; font-weight: 500;">Safer Digital Decisions</p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding: 40px 30px;">
-              <h2 style="margin: 0 0 20px 0; color: #063C5E; font-size: 24px; font-weight: 700;">Membership Approved</h2>
-              <p style="margin: 0 0 20px 0; color: #333333; font-size: 16px; line-height: 1.6;">
-                Dear ${memberUser.name || 'Member'},
-              </p>
-              <p style="margin: 0 0 20px 0; color: #333333; font-size: 16px; line-height: 1.6;">
-                Congratulations! Your membership request for <strong>${orgName}</strong> has been approved.
-              </p>
-              <div style="background-color: #F5F8FB; padding: 20px; border-radius: 6px; margin: 20px 0; border-left: 4px solid #4caf50;">
-                <p style="margin: 0 0 10px 0; color: #333333; font-size: 16px; line-height: 1.6;">
-                  You can now login to your account using your email and password.
-                </p>
-                <p style="margin: 10px 0 0 0; color: #666666; font-size: 14px; line-height: 1.6;">
-                  Visit <a href="${verificationUrl}" style="color: #0B7897;">${verificationUrl}</a> to access your dashboard.
-                </p>
-              </div>
-              <table role="presentation" style="width: 100%; margin: 30px 0; border-collapse: collapse;">
-                <tr>
-                  <td align="center">
-                    <a href="${verificationUrl}" style="display: inline-block; background-color: #0B7897; color: #FFFFFF; text-decoration: none; padding: 14px 30px; border-radius: 6px; font-weight: 600; font-size: 16px;">Login Now</a>
-                  </td>
-                </tr>
-              </table>
-              <div style="border-top: 2px solid #F5F8FB; padding-top: 20px; margin-top: 30px;">
-                <p style="margin: 0; color: #0B7897; font-size: 14px; font-weight: 600;">
-                  Best regards,<br>
-                  The Konfydence Team
-                </p>
-              </div>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="hero">
+        <h1 style="margin:0;font-size:24px;">Konfydence</h1>
+        <p style="margin:6px 0 0 0;color:#FFD700;font-weight:600;">Safer Digital Decisions</p>
+      </div>
+      <div class="content">
+        <h2 style="color:#063C5E;margin:0 0 12px 0;">Membership Approved</h2>
+        <p>Dear ${memberUser.name || 'Member'},</p>
+        <p>Congratulations — your membership request for <strong>${orgName}</strong> has been approved by ${approverName} ${approverEmail ? ` at ${approverEmail}` : ''}</p>
+     
+
+        ${txCode ? `
+        <div class="highlight">
+          <p style="margin:0 0 8px 0;"><strong>Access Code And Play Game Now</strong></p>
+          <p class="muted" style="margin:0 0 8px 0;">
+            The organization/institute has purchased access that grants seats for members. Use the code below to claim your seat and play.
+          </p>
+          <p style="margin:0;"><strong>Game Play Code:</strong> ${txCode}</p>
+        
+        </div>
+        ` : ''}
+
+        <p style="margin-top:16px;">Note: Each code is intended for use by members of this organization/Institution . If you have any issues accessing your account or using the code, please contact your organization admin (${approverName}${approverEmail ? ` at ${approverEmail}` : ''}) or contact our support team.</p>
+
+        <p style="margin-top:20px;text-align:center;">
+          <a class="btn" href="${verificationUrl}">Login Now</a>
+        </p>
+
+        <div style="border-top:2px solid #F5F8FB; padding-top:20px; margin-top:24px;">
+          <p style="margin:0;color:white;font-weight:600;">Best regards,<br/>The Konfydence Team</p>
+        </div>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
           `;
