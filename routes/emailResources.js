@@ -5,27 +5,32 @@ const router = express.Router();
 const emailService = require('../utils/emailService');
 
 const bundleDownloads = {
-  'free-family': ['Konfydence-Family-Tech-Contract.pdf', 'Family_SSK_Rules.pdf'],
+  // Free Family - files live under public/pdfs/families/
+  'free-family': [
+    'families/Konfydence-Family-Tech-Contract.pdf',
+    'families/Family_SSK_Rules.pdf'
+  ],
+  // Free Classroom - files at public/pdfs root
   'free-classroom': [
     'School_Lesson_Plan.pdf',
     'School_Parent HACK Guide.pdf',
-    'School Classroom_Pause_Posters.pdf',
+    'SchoolClassroom_Pause_Posters.pdf',
     'School_Curriculum Alignment Map.pdf',
   ],
+  // Ambassador pack - files under public/pdfs/Ambassador/
   'ambassador': ['Ambassador/KonfydenceAmbassador.pdf', 'Ambassador/KonfydenceAmbassadorAgreement.pdf'],
+  // Advanced Educator Toolkit - files at public/pdfs root
   'advanced-educator': [
     'School_Lesson_Plan.pdf',
-    'Teacher_Classroom_Drill.docx',
-    'School Implementation Road map.pdf',
-    'Student_Organization_Safety_Toolkit.docx',
+    'School Implementation Roadmap.pdf',
     'Konfydence_For_Schools.pdf',
-    'Konfydence_For_Universities.pdf',
+    'Konfydence_For_Universities.pdf'
   ],
+  // Compliance & Audit Pack - files under corporate/ and implementation/
   'compliance-audit': [
-    'NIS2 ISO Alignment.pdf',
-    'Behavioral Evidence Template.pdf',
-    'CoMaSi.docx',
-    'Pilot Proof of Concept Agreement.pdf',
+    'corporate/NIS2_ISO_Alignment.pdf',
+    'implementation/BehavioralEvidenceTemplate.pdf',
+    'corporate/PilotProofofConceptAgreement.pdf'
   ],
 };
 
