@@ -194,16 +194,24 @@ router.post(
           // Don't fail the request if unified lead creation fails for other reasons
       }
 
-      // Send demo request confirmation email for demo topics
-      const demoTopics = ['demo-schools', 'demo-businesses'];
-      if (demoTopics.includes(req.body.topic)) {
+      // Send demo request confirmation email for demo-related submissions
+      // Previously only demo-schools/demo-businesses received a confirmation.
+      // Now also include CoMaSi (B2B) and Education (B2E) submissions — and any form that sets formSource to b2b_form or b2e_form.
+      const explicitDemoTopics = ['demo-schools', 'demo-businesses'];
+      const additionalDemoTopics = ['CoMaSi', 'comasy', 'education', 'education-youth-pack', 'b2b_demo', 'demo-families'];
+      const demoFormSources = ['b2b_form', 'b2e_form'];
+
+      const isDemoTopic = explicitDemoTopics.includes(req.body.topic) || additionalDemoTopics.includes(req.body.topic);
+      const isDemoFormSource = req.body.formSource && demoFormSources.includes(req.body.formSource);
+
+      if (isDemoTopic || isDemoFormSource) {
         try {
-          console.log('📧 Sending demo request confirmation email for topic:', req.body.topic);
+          console.log('📧 Sending demo request confirmation email (topic/formSource):', { topic: req.body.topic, formSource: req.body.formSource });
           const emailResult = await sendDemoRequestConfirmationEmail(
             req.body.firstName,
             req.body.email
           );
-          
+
           if (emailResult.success) {
             console.log('✅ Demo request confirmation email sent successfully:', emailResult.messageId);
           } else {
