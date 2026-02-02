@@ -41,12 +41,15 @@ router.post(
           'latest-news': 'You have already subscribed to latest news.',
           'weekly-insights': 'You have already subscribed to weekly insights.',
           'general': 'You have already subscribed to our newsletter.',
-          'waitlist': 'You are already on the waitlist. We\'ll notify you when we launch on Kickstarter.',
+          'waitlist': 'You are already on the waitlist.',
         };
-        
-        return res.status(200).json({
-          success: true,
-          message: messages[subscriptionType] || 'You have already subscribed.',
+
+        // If the email is already registered for this subscription type, return a 400
+        // so the frontend can show a clear "already registered" error instead of treating it as success.
+        return res.status(400).json({
+          success: false,
+          message: messages[subscriptionType] || 'This email has already been registered.',
+          duplicate: true,
           data: existingSubscriber,
         });
       }
@@ -81,27 +84,29 @@ router.post(
           'general': 'You have already subscribed to our newsletter.',
           'waitlist': 'You are already on the waitlist. We\'ll notify you when we launch on Kickstarter.',
         };
-        
+
         // Check if error is from compound index (email + subscriptionType)
         const keyPattern = error.keyPattern || {};
         const subscriptionTypeFromError = keyPattern.subscriptionType ? req.body.subscriptionType : 'general';
-        
+
         // Try to find existing subscription to return it
         try {
-          const existing = await Subscriber.findOne({ 
+          const existing = await Subscriber.findOne({
             email: req.body.email?.toLowerCase().trim(),
-            subscriptionType: subscriptionTypeFromError 
+            subscriptionType: subscriptionTypeFromError
           });
-          
-          return res.status(200).json({
-            success: true,
-            message: messages[subscriptionTypeFromError] || 'You have already subscribed.',
+
+          return res.status(400).json({
+            success: false,
+            message: messages[subscriptionTypeFromError] || 'This email has already been registered.',
+            duplicate: true,
             data: existing,
           });
         } catch (findError) {
-          return res.status(200).json({
-            success: true,
-            message: messages[subscriptionTypeFromError] || 'You have already subscribed.',
+          return res.status(400).json({
+            success: false,
+            message: messages[subscriptionTypeFromError] || 'This email has already been registered.',
+            duplicate: true,
           });
         }
       }
