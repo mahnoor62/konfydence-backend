@@ -52,22 +52,30 @@ router.post(
         fullBody: req.body
       });
 
-      // Check if a lead with this email already exists (before creating contact message)
-      const existingLead = await Lead.findOne({ email: req.body.email.toLowerCase().trim() });
-      
-      if (existingLead) {
-        console.log('⚠️ Duplicate contact attempt:', {
-          email: req.body.email,
-          existingLeadId: existingLead._id,
-          existingSource: existingLead.source
-        });
-        return res.status(400).json({ 
-          error: 'You have already contacted us. Our team will get back to you soon.',
-          duplicate: true
-        });
-      }
+      const normalizedEmail = req.body.email.toLowerCase().trim();
+      const demoTopics = ['demo-schools', 'demo-businesses', 'demo-families'];
+      const isDemoRequest = demoTopics.includes(req.body.topic);
 
-      // Create contact message
+      // Only block duplicate for DEMO: one demo request per email
+      if (isDemoRequest) {
+        const existingDemoLead = await Lead.findOne({
+          email: normalizedEmail,
+          $or: [
+            { demoRequested: true },
+            { topic: { $in: demoTopics } }
+          ]
+        });
+        if (existingDemoLead) {
+          console.log('⚠️ Duplicate demo request:', { email: req.body.email, existingLeadId: existingDemoLead._id });
+          return res.status(400).json({
+            error: 'You have already contacted us. Our team will get back to you soon.',
+            duplicate: true
+          });
+        }
+      }
+      // Normal contact (Scam Survival Kit, Education/Youth Pack, CoMaSi, Ambassador Program, Other): allow multiple messages per email
+
+      // Create contact message (always, for both demo and normal contact)
       const message = await ContactMessage.create(req.body);
 
       console.log('✅ Contact message created with topic:', message.topic);
@@ -141,52 +149,84 @@ router.post(
           throw new Error(`Invalid segment mapping for topic: ${req.body.topic}`);
         }
 
+        let lead;
+        if (isDemoRequest) {
+          // Demo: create new Lead (duplicate already blocked above)
           const leadData = {
-            name: fullName, // Combine firstName and lastName for Lead model
+            name: fullName,
             email: req.body.email,
-          organizationName: req.body.organization || req.body.company || '',
-          topic: req.body.topic, // Store original topic exactly as received from form
-            segment: segment, // Segment mapped from topic
+            organizationName: req.body.organization || req.body.company || '',
+            topic: req.body.topic,
+            segment: segment,
             source: source,
             status: 'new',
-          engagementCount: 0,
-          demoRequested: ['b2b_demo', 'comasy', 'nis2-audit', 'CoMaSi', 'demo-families', 'demo-schools', 'demo-businesses'].includes(req.body.topic), // Mark as demo requested if demo topic
-          teamSize: req.body.teamSize || '', // Save team size if provided (B2B)
-          studentStaffSize: req.body.studentStaffSize || '', // Save student/staff size if provided (B2E)
-          message: req.body.message || '', // Save original message
-          // Address fields for demo topics (from contact form)
-          address: req.body.address || '',
-          city: req.body.city || '',
-          state: req.body.state || '',
-          country: req.body.country || '',
-          phone: req.body.phone || '',
-          department: req.body.department || '',
-          position: req.body.position || '',
-          website: req.body.website || ''
-        };
-
-        console.log('📦 Lead data to be created:', leadData);
-
-          const lead = await Lead.create(leadData);
-          // Auto-calculate status (will be warm if demoRequested, otherwise new)
+            engagementCount: 0,
+            demoRequested: true,
+            teamSize: req.body.teamSize || '',
+            studentStaffSize: req.body.studentStaffSize || '',
+            message: req.body.message || '',
+            address: req.body.address || '',
+            city: req.body.city || '',
+            state: req.body.state || '',
+            country: req.body.country || '',
+            phone: req.body.phone || '',
+            department: req.body.department || '',
+            position: req.body.position || '',
+            website: req.body.website || ''
+          };
+          lead = await Lead.create(leadData);
           lead.status = lead.calculateStatus();
           await lead.save();
-        
-        console.log('✅ Unified lead created from contact form:', {
-          leadId: lead._id,
-          name: lead.name,
-          email: lead.email,
-          topic: lead.topic, // Saved topic (should match req.body.topic)
-          segment: lead.segment, // Saved segment (mapped from topic)
-          source: lead.source,
-          organizationName: lead.organizationName
-        });
+          console.log('✅ Unified lead created (demo):', { leadId: lead._id, email: lead.email, topic: lead.topic });
+        } else {
+          // Normal contact: add message to existing lead or create new lead with messages array
+          const existingLead = await Lead.findOne({ email: normalizedEmail });
+          const messageEntry = { topic: req.body.topic, text: req.body.message || '', createdAt: new Date() };
+          if (existingLead) {
+            if (!existingLead.messages) existingLead.messages = [];
+            existingLead.messages.push(messageEntry);
+            existingLead.message = req.body.message || '';
+            existingLead.name = fullName;
+            if (req.body.organization) existingLead.organizationName = req.body.organization || existingLead.organizationName;
+            await existingLead.save();
+            lead = existingLead;
+            console.log('✅ Lead updated with new message (normal contact):', { leadId: lead._id, email: lead.email, messagesCount: lead.messages.length });
+          } else {
+            const leadData = {
+              name: fullName,
+              email: req.body.email,
+              organizationName: req.body.organization || req.body.company || '',
+              topic: req.body.topic,
+              segment: segment,
+              source: source,
+              status: 'new',
+              engagementCount: 0,
+              demoRequested: false,
+              message: req.body.message || '',
+              messages: [messageEntry],
+              teamSize: req.body.teamSize || '',
+              studentStaffSize: req.body.studentStaffSize || '',
+              address: req.body.address || '',
+              city: req.body.city || '',
+              state: req.body.state || '',
+              country: req.body.country || '',
+              phone: req.body.phone || '',
+              department: req.body.department || '',
+              position: req.body.position || '',
+              website: req.body.website || ''
+            };
+            lead = await Lead.create(leadData);
+            lead.status = lead.calculateStatus();
+            await lead.save();
+            console.log('✅ Unified lead created (normal contact):', { leadId: lead._id, email: lead.email, topic: lead.topic });
+          }
+        }
         } catch (unifiedError) {
-        console.error('❌ Error creating unified lead from contact:', unifiedError);
+        console.error('❌ Error creating/updating unified lead from contact:', unifiedError);
         console.error('Error details:', unifiedError.message, unifiedError.stack);
-          // Check if error is duplicate email (MongoDB duplicate key error)
+          // Only return duplicate error for demo (MongoDB duplicate key on email - should not happen for normal contact now)
           if (unifiedError.code === 11000 || unifiedError.message.includes('duplicate')) {
-            return res.status(400).json({ 
+            return res.status(400).json({
               error: 'You have already contacted us. Our team will get back to you soon.',
               duplicate: true
             });

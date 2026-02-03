@@ -71,7 +71,18 @@ const LeadSchema = new Schema(
     message: {
       type: String,
       trim: true,
-      comment: 'Original message from contact form'
+      comment: 'Original message from contact form (or latest for normal contact)'
+    },
+    // For normal contact topics: multiple messages per lead (email), admin sees all
+    messages: [{
+      topic: { type: String, trim: true },
+      text: { type: String, trim: true },
+      createdAt: { type: Date, default: Date.now }
+    }],
+    // When admin last viewed messages (for unread badge)
+    messagesReadAt: {
+      type: Date,
+      comment: 'When admin last opened the messages dialog; used to show unread count'
     },
     topic: {
       type: String,
