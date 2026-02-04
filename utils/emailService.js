@@ -1935,10 +1935,51 @@ Konfydence Team
 };
 
 /**
- * Send Konfydence Teaser PDF to the given email (e.g. after early-bird form on scam-survival-kit).
+ * Send email with a link to the Konfydence Teaser PDF (no attachment – works in all environments including live).
+ * @param {string} email - Recipient email
+ * @param {string} pdfUrl - Full URL to the PDF (e.g. https://yoursite.com/pdfs/KonfydenceTeaser.pdf)
+ * @returns {Promise<{ success: boolean, messageId?: string, error?: string }>}
+ */
+const sendTeaserPdfLinkEmail = async (email, pdfUrl) => {
+  try {
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.warn('Email service not configured. Skipping teaser PDF link email.');
+      return { success: false, message: 'Email service not configured' };
+    }
+    const to = (email || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      return { success: false, message: 'Invalid email' };
+    }
+    if (!pdfUrl || !pdfUrl.startsWith('http')) {
+      return { success: false, message: 'Invalid PDF URL' };
+    }
+    const transporter = createTransporter();
+    const mailOptions = {
+      from: `"Konfydence" <${process.env.MAIL_FROM}>`,
+      to,
+      subject: 'Your Konfydence Teaser',
+      text: `Hi,\n\nAs requested, here is your link to download the Konfydence Teaser:\n\n${pdfUrl}\n\nWarm regards,\nKonfydence Team`,
+      html: `
+        <p>Hi,</p>
+        <p>As requested, here is your link to download the Konfydence Teaser:</p>
+        <p><a href="${pdfUrl}" style="color: #0B7897; font-weight: 600;">Download Konfydence Teaser (PDF)</a></p>
+        <p>Konfydence Teaser (PDF): ${pdfUrl}</p>
+        <p>Warm regards,<br>Konfydence Team</p>
+      `,
+    };
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Teaser PDF link email sent to', to, info.messageId);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error('Error sending teaser PDF link email:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send Konfydence Teaser PDF as attachment (used only when file is available on server, e.g. local).
  * @param {string} email - Recipient email
  * @param {Buffer} pdfBuffer - PDF file content
- * @returns {Promise<{ success: boolean, messageId?: string, error?: string }>}
  */
 const sendTeaserPdfEmail = async (email, pdfBuffer) => {
   try {
@@ -1984,6 +2025,7 @@ module.exports = {
   sendDemoApprovedEmail,
   sendDemoRejectedEmail,
   sendTeaserPdfEmail,
+  sendTeaserPdfLinkEmail,
   createTransporter,
   createEmailHeader,
 };

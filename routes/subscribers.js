@@ -1,21 +1,14 @@
 const express = require('express');
-const path = require('path');
-const fs = require('fs').promises;
 const { body, validationResult } = require('express-validator');
 const Subscriber = require('../models/Subscriber');
-const { sendTeaserPdfEmail } = require('../utils/emailService');
+const { sendTeaserPdfLinkEmail } = require('../utils/emailService');
 
 const router = express.Router();
 
-// Path to Konfydence Teaser PDF (relative to project root: web/public/pdfs/KonfydenceTeaser.pdf)
-const getTeaserPdfPath = () => {
-  const fromApi = path.join(__dirname, '..', '..', 'web', 'public', 'pdfs', 'KonfydenceTeaser.pdf');
-  const fromRoot = path.join(process.cwd(), 'web', 'public', 'pdfs', 'KonfydenceTeaser.pdf');
-  try {
-    if (require('fs').existsSync(fromApi)) return fromApi;
-    if (require('fs').existsSync(fromRoot)) return fromRoot;
-  } catch (_) {}
-  return fromRoot;
+// Base URL of the public website (where /pdfs/ is served). Use FRONTEND_URL or SITE_URL in production.
+const getPublicBaseUrl = () => {
+  const url = (process.env.FRONTEND_URL || process.env.SITE_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || process.env.BACKEND_URL || '').toString().trim();
+  return url.replace(/\/$/, '');
 };
 
 router.post(
@@ -133,7 +126,7 @@ router.post(
   }
 );
 
-// Send Konfydence Teaser PDF to the given email (used after early-bird form on scam-survival-kit page)
+// Send email with link to Konfydence Teaser PDF (no file read – works on live where API has no access to public folder)
 router.post(
   '/send-teaser-pdf',
   [body('email').isEmail().withMessage('Valid email required').normalizeEmail()],
@@ -148,18 +141,16 @@ router.post(
         });
       }
       const email = (req.body.email || '').trim().toLowerCase();
-      const pdfPath = getTeaserPdfPath();
-      let pdfBuffer;
-      try {
-        pdfBuffer = await fs.readFile(pdfPath);
-      } catch (err) {
-        console.error('Teaser PDF not found at', pdfPath, err);
+      const baseUrl = getPublicBaseUrl();
+      if (!baseUrl || !baseUrl.startsWith('http')) {
+        console.error('FRONTEND_URL or SITE_URL must be set to a full URL (e.g. https://konfydence.com)');
         return res.status(500).json({
           success: false,
-          message: 'PDF is not available. Please try again later.',
+          message: 'Server configuration error. Please try again later.',
         });
       }
-      const result = await sendTeaserPdfEmail(email, pdfBuffer);
+      const pdfUrl = `${baseUrl}/pdfs/KonfydenceTeaser.pdf`;
+      const result = await sendTeaserPdfLinkEmail(email, pdfUrl);
       if (!result.success) {
         return res.status(500).json({
           success: false,
@@ -168,10 +159,10 @@ router.post(
       }
       return res.status(200).json({
         success: true,
-        message: 'PDF sent to your email. Please check your inbox.',
+        message: 'Cheat Sheet sent to your email. Please check your inbox.',
       });
     } catch (error) {
-      console.error('Send teaser PDF error:', error);
+      console.error('Send teaser PDF link error:', error);
       return res.status(500).json({
         success: false,
         message: 'An error occurred. Please try again later.',
