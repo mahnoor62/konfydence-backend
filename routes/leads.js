@@ -8,7 +8,7 @@ const B2BLead = require('../models/B2BLead');
 const EducationLead = require('../models/EducationLead');
 const FreeTrial = require('../models/FreeTrial');
 const User = require('../models/User');
-const { sendOrganizationCreatedEmail } = require('../utils/emailService');
+const { sendOrganizationCreatedEmail, sendDemoApprovedEmail, sendDemoRejectedEmail } = require('../utils/emailService');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 
@@ -778,6 +778,58 @@ router.put('/unified/:id/demo-status', authenticateToken, checkPermission('leads
     res.json(updatedLead);
   } catch (error) {
     console.error('Error updating demo status:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Update demo approval (admin switch): when ON send approved email, when OFF send rejected email
+router.put('/unified/:id/demo-approval', authenticateToken, checkPermission('leads'), [
+  body('demoApproved').isBoolean(),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const lead = await Lead.findById(req.params.id);
+    if (!lead) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+
+    const previousApproved = !!lead.demoApproved;
+    const newApproved = !!req.body.demoApproved;
+    lead.demoApproved = newApproved;
+    await lead.save();
+
+    // Send email based on new state
+    if (newApproved) {
+      await sendDemoApprovedEmail(lead);
+      await addTimelineEntry(
+        lead,
+        'demo_requested',
+        'Demo request approved; approval email sent to lead',
+        { demoApproved: true },
+        req.userId
+      );
+    } else {
+      await sendDemoRejectedEmail(lead);
+      await addTimelineEntry(
+        lead,
+        'status_changed',
+        'Demo request not approved; rejection email sent to lead',
+        { demoApproved: false },
+        req.userId
+      );
+    }
+
+    const updatedLead = await Lead.findById(req.params.id)
+      .populate('notes.createdBy', 'name email')
+      .populate('timeline.createdBy', 'name email');
+
+    res.json(updatedLead);
+  } catch (error) {
+    console.error('Error updating demo approval:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });

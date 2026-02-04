@@ -49,20 +49,22 @@ const getLogoUrl = () => {
 };
 
 // Helper function to create email header with logo and text
-// If logoCid is provided, use CID embedded image instead of external URL
+// If logoCid is provided, use CID embedded image. If logoUrl is missing or relative, show text only (no broken image).
 const createEmailHeader = (logoCid) => { 
   const logoUrl = getLogoUrl();
   const imgSrc = logoCid ? `cid:${logoCid}` : logoUrl;
+  const hasValidLogo = logoCid || (logoUrl && logoUrl.startsWith('http'));
+  const logoCell = hasValidLogo
+    ? `<td style="width: 80px; vertical-align: middle; padding-right: 15px;"><img src="${imgSrc}" alt="Konfydence Logo" style="max-width: 60px; height: auto; display: block;" /></td>`
+    : '';
   return `
           <!-- Header with Logo -->
           <tr>
             <td style="background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%); padding: 20px 30px;">
               <table role="presentation" style="width: 100%; border-collapse: collapse;">
                 <tr>
-                  <td style="width: 80px; vertical-align: middle; padding-right: 15px;">
-                    <img src="${imgSrc}" alt="Konfydence Logo" style="max-width: 60px; height: auto; display: block;" />
-                  </td>
-                  <td style="vertical-align: middle; text-align: center;">
+                  ${logoCell}
+                  <td style="vertical-align: middle; text-align: center; ${!hasValidLogo ? 'width: 100%;' : ''}">
                     <h1 style="margin: 0; color: ${colors.white}; font-size: 28px; font-weight: 700; line-height: 1.2;">Konfydence</h1>
                     <p style="margin: 5px 0 0 0; color: ${colors.accent}; font-size: 14px; font-weight: 500;">Safer Digital Decisions</p>
                   </td>
@@ -1764,6 +1766,110 @@ const createDemoRequestEmailTemplate = (firstName, email) => {
   `;
 };
 
+const createDemoApprovedEmailTemplate = (firstName) => {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Demo Request Approved</title></head>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: ${colors.background};">
+  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: ${colors.background}; padding: 20px;">
+    <tr><td align="center" style="padding: 20px 0;">
+      <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: ${colors.white}; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+        ${createEmailHeader()}
+        <tr><td style="padding: 40px 30px;">
+          <h2 style="margin: 0 0 20px 0; color: ${colors.primary}; font-size: 24px; font-weight: 700;">Your demo request has been approved</h2>
+          <p style="margin: 0 0 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">Hi ${firstName},</p>
+          <p style="margin: 0 0 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">Good news! Your demo request has been approved.</p>
+          <p style="margin: 20px 0 0 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">Warm regards,<br>Konfydence Team</p>
+        </td></tr>
+        <tr><td style="background-color: ${colors.primary}; padding: 20px 30px; text-align: center;">
+          <p style="margin: 0; color: ${colors.white}; font-size: 12px;">© ${new Date().getFullYear()} Konfydence. All rights reserved.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+};
+
+const createDemoRejectedEmailTemplate = (firstName) => {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Demo Request Update</title></head>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: ${colors.background};">
+  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: ${colors.background}; padding: 20px;">
+    <tr><td align="center" style="padding: 20px 0;">
+      <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: ${colors.white}; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+        ${createEmailHeader()}
+        <tr><td style="padding: 40px 30px;">
+          <h2 style="margin: 0 0 20px 0; color: ${colors.primary}; font-size: 24px; font-weight: 700;">Update on your demo request</h2>
+          <p style="margin: 0 0 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">Hi ${firstName},</p>
+          <p style="margin: 0 0 20px 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">Thank you for your interest. We are unable to approve your demo request at this time. If you have questions or would like to try again later, please contact us.</p>
+          <p style="margin: 20px 0 0 0; color: ${colors.text}; font-size: 16px; line-height: 1.6;">Warm regards,<br>Konfydence Team</p>
+        </td></tr>
+        <tr><td style="background-color: ${colors.primary}; padding: 20px 30px; text-align: center;">
+          <p style="margin: 0; color: ${colors.white}; font-size: 12px;">© ${new Date().getFullYear()} Konfydence. All rights reserved.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+};
+
+const sendDemoApprovedEmail = async (lead) => {
+  try {
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.warn('Email service not configured. Skipping demo approved email.');
+      return { success: false, message: 'Email service not configured' };
+    }
+    const email = (lead.email || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { success: false, message: 'Invalid email' };
+    const firstName = (lead.name || 'there').split(/\s+/)[0] || 'there';
+    const transporter = createTransporter();
+    const mailOptions = {
+      from: `"Konfydence" <${process.env.MAIL_FROM}>`,
+      to: email,
+      subject: 'Your demo request has been approved',
+      html: createDemoApprovedEmailTemplate(firstName),
+      text: `Hi ${firstName},\n\nYour demo request has been approved.\n\nWarm regards,\nKonfydence Team`,
+    };
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Demo approved email sent:', info.messageId);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error('Error sending demo approved email:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+const sendDemoRejectedEmail = async (lead) => {
+  try {
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.warn('Email service not configured. Skipping demo rejected email.');
+      return { success: false, message: 'Email service not configured' };
+    }
+    const email = (lead.email || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { success: false, message: 'Invalid email' };
+    const firstName = (lead.name || 'there').split(/\s+/)[0] || 'there';
+    const transporter = createTransporter();
+    const mailOptions = {
+      from: `"Konfydence" <${process.env.MAIL_FROM}>`,
+      to: email,
+      subject: 'Update on your demo request',
+      html: createDemoRejectedEmailTemplate(firstName),
+      text: `Hi ${firstName},\n\nThank you for your interest. We are unable to approve your demo request at this time. If you have questions or would like to try again later, please contact us.\n\nWarm regards,\nKonfydence Team`,
+    };
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Demo rejected email sent:', info.messageId);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error('Error sending demo rejected email:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 const sendDemoRequestConfirmationEmail = async (firstName, email) => {
   try {
     // Check if email service is configured
@@ -1835,6 +1941,8 @@ module.exports = {
   sendMembershipTerminationEmail,
   sendOrganizationCreatedEmail,
   sendDemoRequestConfirmationEmail,
+  sendDemoApprovedEmail,
+  sendDemoRejectedEmail,
   createTransporter,
   createEmailHeader,
 };

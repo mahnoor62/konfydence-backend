@@ -126,6 +126,11 @@ const LeadSchema = new Schema(
     demoCompletedAt: {
       type: Date
     },
+    // Admin approval for demo request: false = pending/rejected, true = approved; toggling sends email to lead
+    demoApproved: {
+      type: Boolean,
+      default: false
+    },
     linkedTrialIds: [{
       type: Schema.Types.ObjectId,
       ref: 'FreeTrial'
