@@ -1934,6 +1934,46 @@ Konfydence Team
   }
 };
 
+/**
+ * Send Konfydence Teaser PDF to the given email (e.g. after early-bird form on scam-survival-kit).
+ * @param {string} email - Recipient email
+ * @param {Buffer} pdfBuffer - PDF file content
+ * @returns {Promise<{ success: boolean, messageId?: string, error?: string }>}
+ */
+const sendTeaserPdfEmail = async (email, pdfBuffer) => {
+  try {
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.warn('Email service not configured. Skipping teaser PDF email.');
+      return { success: false, message: 'Email service not configured' };
+    }
+    const to = (email || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      return { success: false, message: 'Invalid email' };
+    }
+    const transporter = createTransporter();
+    const mailOptions = {
+      from: `"Konfydence" <${process.env.MAIL_FROM}>`,
+      to,
+      subject: 'Your Konfydence Teaser',
+      text: 'Hi,\n\nAs requested, please find the Konfydence Teaser attached.\n\nWarm regards,\nKonfydence Team',
+      html: `
+        <p>Hi,</p>
+        <p>As requested, please find the Konfydence Teaser attached.</p>
+        <p>Warm regards,<br>Konfydence Team</p>
+      `,
+      attachments: [
+        { filename: 'KonfydenceTeaser.pdf', content: pdfBuffer, contentType: 'application/pdf' },
+      ],
+    };
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Teaser PDF email sent to', to, info.messageId);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error('Error sending teaser PDF email:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 module.exports = {
   sendStatusUpdateEmail,
   sendCustomPackageCreatedEmail,
@@ -1943,6 +1983,7 @@ module.exports = {
   sendDemoRequestConfirmationEmail,
   sendDemoApprovedEmail,
   sendDemoRejectedEmail,
+  sendTeaserPdfEmail,
   createTransporter,
   createEmailHeader,
 };

@@ -1,8 +1,22 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs').promises;
 const { body, validationResult } = require('express-validator');
 const Subscriber = require('../models/Subscriber');
+const { sendTeaserPdfEmail } = require('../utils/emailService');
 
 const router = express.Router();
+
+// Path to Konfydence Teaser PDF (relative to project root: web/public/pdfs/KonfydenceTeaser.pdf)
+const getTeaserPdfPath = () => {
+  const fromApi = path.join(__dirname, '..', '..', 'web', 'public', 'pdfs', 'KonfydenceTeaser.pdf');
+  const fromRoot = path.join(process.cwd(), 'web', 'public', 'pdfs', 'KonfydenceTeaser.pdf');
+  try {
+    if (require('fs').existsSync(fromApi)) return fromApi;
+    if (require('fs').existsSync(fromRoot)) return fromRoot;
+  } catch (_) {}
+  return fromRoot;
+};
 
 router.post(
   '/subscribe',
@@ -114,6 +128,53 @@ router.post(
       return res.status(500).json({
         success: false,
         message: 'An error occurred while subscribing. Please try again later.',
+      });
+    }
+  }
+);
+
+// Send Konfydence Teaser PDF to the given email (used after early-bird form on scam-survival-kit page)
+router.post(
+  '/send-teaser-pdf',
+  [body('email').isEmail().withMessage('Valid email required').normalizeEmail()],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Valid email address is required',
+          errors: errors.array(),
+        });
+      }
+      const email = (req.body.email || '').trim().toLowerCase();
+      const pdfPath = getTeaserPdfPath();
+      let pdfBuffer;
+      try {
+        pdfBuffer = await fs.readFile(pdfPath);
+      } catch (err) {
+        console.error('Teaser PDF not found at', pdfPath, err);
+        return res.status(500).json({
+          success: false,
+          message: 'PDF is not available. Please try again later.',
+        });
+      }
+      const result = await sendTeaserPdfEmail(email, pdfBuffer);
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: result.error || result.message || 'Failed to send email. Please try again.',
+        });
+      }
+      return res.status(200).json({
+        success: true,
+        message: 'PDF sent to your email. Please check your inbox.',
+      });
+    } catch (error) {
+      console.error('Send teaser PDF error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'An error occurred. Please try again later.',
       });
     }
   }
